@@ -10,10 +10,10 @@
 ```
 Phase 1: Core Architecture          [##########] 100%  COMPLETE
 Phase 2: Email Module               [##########] 100%  COMPLETE
-Phase 3: Calendar & Contacts Views  [##########] 100%  COMPLETE  <-- current
+Phase 3: Calendar & Contacts Views  [##########] 100%  COMPLETE
 Phase 4: Ribbon & UI Wiring         [##########] 100%  COMPLETE
 Phase 5: Linux Platform & Build     [----------]   0%  PLANNED
-Phase 6: Persistence & Offline      [#---------]  10%  PLANNED
+Phase 6: Persistence & Offline      [##########] 100%  COMPLETE  <-- current
 Phase 7: Advanced Features          [----------]   0%  FUTURE
 ```
 
@@ -109,19 +109,19 @@ Generate Flutter Linux desktop runner files so the app can compile and run nativ
 
 ---
 
-## Phase 6: Persistence & Offline — PLANNED
+## Phase 6: Persistence & Offline — COMPLETE
 
 Replace in-memory DataCache with SQLite for data that survives restarts.
 
 | Task | File(s) | Status |
 |------|---------|--------|
-| Define Drift database tables (accounts, messages, contacts, events) | `database_service.dart` | Pending |
-| Migrate AccountProvider from SharedPreferences to Drift | `account_provider.dart` | Pending |
-| Cache fetched messages locally | `mail_provider.dart`, `database_service.dart` | Pending |
-| Persist calendar events to SQLite | `calendar_provider.dart` | Pending |
-| Persist contacts to SQLite | `contacts_provider.dart` | Pending |
-| Secure credential storage (encrypt package) | `account_provider.dart` | Pending |
-| Offline mode indicator in status bar | `status_bar.dart` | Pending |
+| Define Drift database tables (accounts, messages, contacts, events) | `database_service.dart` | Done |
+| Migrate AccountProvider from SharedPreferences to Drift | `account_provider.dart` | Done |
+| Cache fetched messages locally | `database_service.dart` (write-through cache) | Done |
+| Persist calendar events to SQLite | `database_service.dart` (write-through cache) | Done |
+| Persist contacts to SQLite | `database_service.dart` (write-through cache) | Done |
+| Secure credential storage (encrypt package) | `crypto_service.dart`, `account_provider.dart` | Done |
+| Offline mode indicator in status bar | `status_bar.dart` | Done |
 
 ---
 
@@ -172,7 +172,8 @@ lib/
 │   └── contacts_provider.dart         # Contact list, search, filter, CRUD
 ├── services/
 │   ├── email_service.dart             # IMAP/SMTP via enough_mail
-│   └── database_service.dart          # DataCache (in-memory) + future Drift
+│   ├── database_service.dart          # AppDatabase (Drift/SQLite) + DataCache (write-through)
+│   └── crypto_service.dart            # AES-256 credential encryption
 ├── screens/
 │   ├── home_screen.dart               # Main layout + ribbon configurations
 │   ├── mail/
@@ -202,11 +203,11 @@ lib/
 |---------|---------|------|
 | `provider` | State management | Yes |
 | `enough_mail` | IMAP/SMTP protocol | Yes |
-| `shared_preferences` | Account persistence | Yes |
+| `shared_preferences` | Legacy (migrated to SQLite) | Deprecated |
 | `uuid` | Unique ID generation | Yes |
 | `intl` | Date/number formatting | Yes |
 | `table_calendar` | Calendar month grid | Yes |
 | `flutter_html` | HTML email rendering | Not yet |
-| `drift` + `sqlite3_flutter_libs` | Local database | Not yet |
+| `drift` + `sqlite3_flutter_libs` | Local database | Yes |
 | `file_picker` | Attachment save dialog | Not yet |
-| `encrypt` | Credential encryption | Not yet |
+| `encrypt` | Credential encryption | Yes |

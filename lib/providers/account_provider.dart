@@ -1,13 +1,14 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../models/email_account.dart';
 import '../services/database_service.dart';
+import '../services/crypto_service.dart';
 
 /// Manages email accounts -- loading, saving, adding, removing.
+/// Persists to SQLite via DataCache with encrypted credentials.
 class AccountProvider extends ChangeNotifier {
   final DataCache _cache = DataCache.instance;
+  CryptoService? _crypto;
   bool _isInitialized = false;
   String? _activeAccountId;
 
@@ -20,38 +21,54 @@ class AccountProvider extends ChangeNotifier {
   }
 
   AccountProvider() {
-    _loadAccounts();
+    _initialize();
   }
 
-  Future<void> _loadAccounts() async {
+  Future<void> _initialize() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getStringList('accounts') ?? [];
-      for (final json in raw) {
-        final map = jsonDecode(json) as Map<String, dynamic>;
-        final account = EmailAccount.fromMap(map);
-        _cache.saveAccount(account);
+      // Initialize the database-backed cache and crypto service
+      await _cache.initialize();
+      _crypto = await CryptoService.getInstance();
+
+      // Decrypt passwords for in-memory accounts
+      for (final account in _cache.accounts) {
+        final decrypted = account.copyWith(
+          password: _crypto!.decrypt(account.password),
+        );
+        // Update in-memory only (don't re-write to DB)
+        _cache.accountsMap[account.id] = decrypted;
       }
-      _activeAccountId = prefs.getString('activeAccountId');
+
+      if (accounts.isNotEmpty) {
+        _activeAccountId = accounts.first.id;
+      }
     } catch (e) {
-      print('Error loading accounts: $e');
+      debugPrint('Error initializing accounts: $e');
     }
     _isInitialized = true;
     notifyListeners();
   }
 
   Future<void> addAccount(EmailAccount account) async {
-    _cache.saveAccount(account);
+    // Store with encrypted password in DB, plaintext in memory
+    final encrypted = account.copyWith(
+      password: _crypto?.encrypt(account.password) ?? account.password,
+    );
+    _cache.accountsMap[account.id] = account; // plaintext in memory
+    _cache.db?.upsertAccount(encrypted.toMap()); // encrypted in DB
+
     if (accounts.length == 1) {
       _activeAccountId = account.id;
     }
-    await _persistAccounts();
     notifyListeners();
   }
 
   Future<void> updateAccount(EmailAccount account) async {
-    _cache.saveAccount(account);
-    await _persistAccounts();
+    final encrypted = account.copyWith(
+      password: _crypto?.encrypt(account.password) ?? account.password,
+    );
+    _cache.accountsMap[account.id] = account;
+    _cache.db?.upsertAccount(encrypted.toMap());
     notifyListeners();
   }
 
@@ -60,7 +77,6 @@ class AccountProvider extends ChangeNotifier {
     if (_activeAccountId == id) {
       _activeAccountId = accounts.isNotEmpty ? accounts.first.id : null;
     }
-    await _persistAccounts();
     notifyListeners();
   }
 
@@ -70,13 +86,4 @@ class AccountProvider extends ChangeNotifier {
   }
 
   String generateAccountId() => const Uuid().v4();
-
-  Future<void> _persistAccounts() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = accounts.map((a) => jsonEncode(a.toMap())).toList();
-    await prefs.setStringList('accounts', raw);
-    if (_activeAccountId != null) {
-      await prefs.setString('activeAccountId', _activeAccountId!);
-    }
-  }
 }
