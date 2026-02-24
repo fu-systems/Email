@@ -9,6 +9,57 @@ import '../providers/navigation_provider.dart';
 class OutlookNavigationBar extends StatelessWidget {
   const OutlookNavigationBar({super.key});
 
+  void _showNavigationOptions(BuildContext context, NavigationProvider nav) {
+    final RenderBox button = context.findRenderObject() as RenderBox;
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final position = RelativeRect.fromRect(
+      Rect.fromPoints(
+        button.localToGlobal(Offset(button.size.width - 120, 0),
+            ancestor: overlay),
+        button.localToGlobal(
+            Offset(button.size.width, button.size.height),
+            ancestor: overlay),
+      ),
+      Offset.zero & overlay.size,
+    );
+
+    showMenu<NavigationSection>(
+      context: context,
+      position: position,
+      items: NavigationSection.values.map((section) {
+        return PopupMenuItem<NavigationSection>(
+          value: section,
+          height: 32,
+          child: Row(
+            children: [
+              Icon(section.icon, size: 16,
+                  color: nav.currentSection == section
+                      ? OutlookTheme.primaryBlue
+                      : OutlookTheme.textSecondary),
+              const SizedBox(width: 8),
+              Text(
+                section.label,
+                style: TextStyle(
+                  fontFamily: OutlookTheme.fontFamily,
+                  fontFamilyFallback: OutlookTheme.fontFamilyFallback,
+                  fontSize: 12,
+                  fontWeight: nav.currentSection == section
+                      ? FontWeight.w600
+                      : FontWeight.w400,
+                  color: OutlookTheme.textPrimary,
+                ),
+              ),
+            ],
+          ),
+        );
+      }).toList(),
+    ).then((section) {
+      if (section != null) {
+        nav.switchSection(section);
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final nav = context.watch<NavigationProvider>();
@@ -33,7 +84,7 @@ class OutlookNavigationBar extends StatelessWidget {
           // Overflow "..." menu
           _OverflowButton(
             onTap: () {
-              // TODO: Show navigation options popup
+              _showNavigationOptions(context, nav);
             },
           ),
         ],

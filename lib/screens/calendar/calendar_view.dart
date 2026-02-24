@@ -297,7 +297,7 @@ class _EventListPane extends StatelessWidget {
   void _showEventDialog(BuildContext context, {CalendarEvent? event}) {
     showDialog(
       context: context,
-      builder: (_) => _EventEditorDialog(event: event),
+      builder: (_) => EventEditorDialog(event: event),
     );
   }
 }
@@ -472,16 +472,16 @@ class _EventTileState extends State<_EventTile> {
 }
 
 /// Event create/edit dialog.
-class _EventEditorDialog extends StatefulWidget {
+class EventEditorDialog extends StatefulWidget {
   final CalendarEvent? event;
 
-  const _EventEditorDialog({this.event});
+  const EventEditorDialog({super.key, this.event});
 
   @override
-  State<_EventEditorDialog> createState() => _EventEditorDialogState();
+  State<EventEditorDialog> createState() => _EventEditorDialogState();
 }
 
-class _EventEditorDialogState extends State<_EventEditorDialog> {
+class _EventEditorDialogState extends State<EventEditorDialog> {
   late TextEditingController _titleController;
   late TextEditingController _locationController;
   late TextEditingController _descriptionController;

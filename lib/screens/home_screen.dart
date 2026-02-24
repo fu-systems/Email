@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../theme/outlook_theme.dart';
+import '../models/folder.dart';
 import '../providers/navigation_provider.dart';
 import '../providers/mail_provider.dart';
 import '../providers/account_provider.dart';
@@ -149,12 +150,19 @@ class _HomeScreenState extends State<HomeScreen> {
                 RibbonItem(
                   label: 'Move',
                   icon: Icons.drive_file_move_outline,
-                  onTap: () {},
+                  onTap: () => _showMoveDialog(context),
                 ),
                 RibbonItem(
                   label: 'Rules',
                   icon: Icons.rule,
-                  onTap: () {},
+                  onTap: () {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Rules and filters coming in a future update'),
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  },
                 ),
               ],
             ),
@@ -210,7 +218,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   icon: Icons.create_new_folder,
                   iconColor: OutlookTheme.primaryBlue,
                   isLarge: true,
-                  onTap: () {},
+                  onTap: () => _showNewFolderDialog(context),
                 ),
               ],
             ),
@@ -225,12 +233,16 @@ class _HomeScreenState extends State<HomeScreen> {
                 RibbonItem(
                   label: 'Reading Pane',
                   icon: Icons.view_sidebar,
-                  onTap: () {},
+                  onTap: () {
+                    context.read<MailProvider>().toggleReadingPane();
+                  },
                 ),
                 RibbonItem(
                   label: 'Folder Pane',
                   icon: Icons.view_list,
-                  onTap: () {},
+                  onTap: () {
+                    context.read<MailProvider>().toggleFolderPane();
+                  },
                 ),
               ],
             ),
@@ -421,11 +433,207 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _openNewEvent(BuildContext context) {
-    // Handled within CalendarView
+    showDialog(
+      context: context,
+      builder: (_) => const EventEditorDialog(),
+    );
   }
 
   void _openNewContact(BuildContext context) {
-    // Handled within ContactsView
+    showDialog(
+      context: context,
+      builder: (_) => const ContactEditorDialog(),
+    );
+  }
+
+  void _showMoveDialog(BuildContext context) {
+    final mail = context.read<MailProvider>();
+    final msg = mail.selectedMessage;
+    if (msg == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Select a message to move')),
+      );
+      return;
+    }
+
+    final folders = mail.folders
+        .where((f) => f.id != mail.selectedFolder?.id)
+        .toList();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        child: SizedBox(
+          width: 320,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                height: 36,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                color: OutlookTheme.primaryBlue,
+                child: Row(
+                  children: [
+                    const Text('Move to Folder',
+                        style: OutlookTheme.titleBarStyle),
+                    const Spacer(),
+                    IconButton(
+                      icon: const Icon(Icons.close,
+                          size: 14, color: Colors.white),
+                      onPressed: () => Navigator.of(ctx).pop(),
+                      padding: EdgeInsets.zero,
+                      constraints:
+                          const BoxConstraints(minWidth: 24, minHeight: 24),
+                    ),
+                  ],
+                ),
+              ),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 300),
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: folders.length,
+                  itemBuilder: (_, i) {
+                    final folder = folders[i];
+                    return _MoveFolderItem(
+                      folder: folder,
+                      onTap: () {
+                        mail.moveMessage(msg, folder);
+                        Navigator.of(ctx).pop();
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showNewFolderDialog(BuildContext context) {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        child: SizedBox(
+          width: 360,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                height: 36,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                color: OutlookTheme.primaryBlue,
+                child: Row(
+                  children: [
+                    const Text('Create New Folder',
+                        style: OutlookTheme.titleBarStyle),
+                    const Spacer(),
+                    IconButton(
+                      icon: const Icon(Icons.close,
+                          size: 14, color: Colors.white),
+                      onPressed: () => Navigator.of(ctx).pop(),
+                      padding: EdgeInsets.zero,
+                      constraints:
+                          const BoxConstraints(minWidth: 24, minHeight: 24),
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    TextField(
+                      controller: controller,
+                      autofocus: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Folder name',
+                        hintText: 'Enter folder name',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    OutlinedButton(
+                      onPressed: () => Navigator.of(ctx).pop(),
+                      child: const Text('Cancel'),
+                    ),
+                    const SizedBox(width: 8),
+                    ElevatedButton(
+                      onPressed: () {
+                        Navigator.of(ctx).pop();
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                                'Folder creation will be available in a future update'),
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+                      },
+                      child: const Text('Create'),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MoveFolderItem extends StatefulWidget {
+  final MailFolder folder;
+  final VoidCallback onTap;
+
+  const _MoveFolderItem({required this.folder, required this.onTap});
+
+  @override
+  State<_MoveFolderItem> createState() => _MoveFolderItemState();
+}
+
+class _MoveFolderItemState extends State<_MoveFolderItem> {
+  bool _isHovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => setState(() => _isHovered = true),
+      onExit: (_) => setState(() => _isHovered = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Container(
+          height: 32,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          color: _isHovered ? OutlookTheme.hoverColor : Colors.transparent,
+          child: Row(
+            children: [
+              Icon(widget.folder.icon,
+                  size: 16, color: OutlookTheme.textSecondary),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  widget.folder.name,
+                  style: OutlookTheme.folderLabelStyle,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 

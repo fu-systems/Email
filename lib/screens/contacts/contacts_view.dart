@@ -217,7 +217,7 @@ class _ContactListPane extends StatelessWidget {
   void _showContactDialog(BuildContext context, {Contact? contact}) {
     showDialog(
       context: context,
-      builder: (_) => _ContactEditorDialog(contact: contact),
+      builder: (_) => ContactEditorDialog(contact: contact),
     );
   }
 }
@@ -432,7 +432,7 @@ class _ContactDetailPane extends StatelessWidget {
                     showDialog(
                       context: context,
                       builder: (_) =>
-                          _ContactEditorDialog(contact: contact),
+                          ContactEditorDialog(contact: contact),
                     );
                   },
                 ),
@@ -629,16 +629,16 @@ class _DetailRow extends StatelessWidget {
 }
 
 /// Contact create/edit dialog.
-class _ContactEditorDialog extends StatefulWidget {
+class ContactEditorDialog extends StatefulWidget {
   final Contact? contact;
 
-  const _ContactEditorDialog({this.contact});
+  const ContactEditorDialog({super.key, this.contact});
 
   @override
-  State<_ContactEditorDialog> createState() => _ContactEditorDialogState();
+  State<ContactEditorDialog> createState() => _ContactEditorDialogState();
 }
 
-class _ContactEditorDialogState extends State<_ContactEditorDialog> {
+class _ContactEditorDialogState extends State<ContactEditorDialog> {
   late TextEditingController _firstNameController;
   late TextEditingController _lastNameController;
   late TextEditingController _companyController;

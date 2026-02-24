@@ -20,32 +20,36 @@ class MailView extends StatelessWidget {
     return Row(
       children: [
         // Folder pane
-        const FolderPane(),
+        if (mail.showFolderPane) const FolderPane(),
         // Message list
-        const MessageList(),
+        if (mail.showReadingPane)
+          const MessageList()
+        else
+          const Expanded(child: MessageList()),
         // Reading pane
-        Expanded(
-          child: ReadingPane(
-            message: mail.selectedMessage,
-            onReply: () => _openCompose(
-              context,
-              replyTo: mail.selectedMessage,
+        if (mail.showReadingPane)
+          Expanded(
+            child: ReadingPane(
+              message: mail.selectedMessage,
+              onReply: () => _openCompose(
+                context,
+                replyTo: mail.selectedMessage,
+              ),
+              onReplyAll: () => _openCompose(
+                context,
+                replyTo: mail.selectedMessage,
+                replyAll: true,
+              ),
+              onForward: () => _openCompose(
+                context,
+                forwardFrom: mail.selectedMessage,
+              ),
+              onDelete: () {
+                final msg = mail.selectedMessage;
+                if (msg != null) mail.deleteMessage(msg);
+              },
             ),
-            onReplyAll: () => _openCompose(
-              context,
-              replyTo: mail.selectedMessage,
-              replyAll: true,
-            ),
-            onForward: () => _openCompose(
-              context,
-              forwardFrom: mail.selectedMessage,
-            ),
-            onDelete: () {
-              final msg = mail.selectedMessage;
-              if (msg != null) mail.deleteMessage(msg);
-            },
           ),
-        ),
       ],
     );
   }

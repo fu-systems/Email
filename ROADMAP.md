@@ -11,7 +11,7 @@
 Phase 1: Core Architecture          [##########] 100%  COMPLETE
 Phase 2: Email Module               [##########] 100%  COMPLETE
 Phase 3: Calendar & Contacts Views  [##########] 100%  COMPLETE  <-- current
-Phase 4: Ribbon & UI Wiring         [########--]  80%  IN PROGRESS
+Phase 4: Ribbon & UI Wiring         [##########] 100%  COMPLETE
 Phase 5: Linux Platform & Build     [----------]   0%  PLANNED
 Phase 6: Persistence & Offline      [#---------]  10%  PLANNED
 Phase 7: Advanced Features          [----------]   0%  FUTURE
@@ -72,7 +72,7 @@ Calendar and contacts screens that plug into the existing provider layer.
 
 ---
 
-## Phase 4: Ribbon & UI Wiring — IN PROGRESS
+## Phase 4: Ribbon & UI Wiring — COMPLETE
 
 Connect all ribbon buttons and UI callbacks to their provider actions.
 
@@ -81,12 +81,15 @@ Connect all ribbon buttons and UI callbacks to their provider actions.
 | Mail ribbon: New Email, Delete, Reply, Reply All, Forward | `home_screen.dart` | Done |
 | Mail ribbon: Send/Receive All Folders, Unread, Flag | `home_screen.dart` | Done |
 | Calendar ribbon: New Appointment | `home_screen.dart` | Done |
-| Calendar ribbon: Today, Day/Week/Month view toggle | `home_screen.dart` | Pending |
+| Calendar ribbon: Today, Day/Week/Month view toggle | `home_screen.dart` | Done |
 | Contacts ribbon: New Contact | `home_screen.dart` | Done |
-| Contacts ribbon: Delete contact | `home_screen.dart` | Pending |
-| Mail ribbon: Move to folder dialog | `home_screen.dart` | Pending |
-| Mail ribbon: New Folder dialog | `home_screen.dart` | Pending |
-| Mail ribbon: Rules (future feature) | `home_screen.dart` | Deferred |
+| Contacts ribbon: Delete contact | `home_screen.dart` | Done |
+| Mail ribbon: Move to folder dialog | `home_screen.dart` | Done |
+| Mail ribbon: New Folder dialog (placeholder) | `home_screen.dart` | Done |
+| Mail ribbon: Rules (placeholder snackbar) | `home_screen.dart` | Done |
+| View ribbon: Reading Pane toggle | `home_screen.dart`, `mail_provider.dart`, `mail_view.dart` | Done |
+| View ribbon: Folder Pane toggle | `home_screen.dart`, `mail_provider.dart`, `mail_view.dart` | Done |
+| Navigation bar overflow popup menu | `navigation_bar.dart` | Done |
 | File tab: Account management backstage view | `home_screen.dart` | Pending |
 
 ---

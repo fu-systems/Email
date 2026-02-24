@@ -19,6 +19,10 @@ class MailProvider extends ChangeNotifier {
   String? _error;
   String _searchQuery = '';
 
+  // Layout visibility
+  bool _showReadingPane = true;
+  bool _showFolderPane = true;
+
   // Getters
   MailFolder? get selectedFolder => _selectedFolder;
   EmailMessage? get selectedMessage => _selectedMessage;
@@ -26,6 +30,8 @@ class MailProvider extends ChangeNotifier {
   bool get isSyncing => _isSyncing;
   String? get error => _error;
   String get searchQuery => _searchQuery;
+  bool get showReadingPane => _showReadingPane;
+  bool get showFolderPane => _showFolderPane;
 
   List<MailFolder> get folders =>
       _activeAccountId != null ? _cache.getFolders(_activeAccountId!) : [];
@@ -321,6 +327,18 @@ class MailProvider extends ChangeNotifier {
 
   void clearError() {
     _error = null;
+    notifyListeners();
+  }
+
+  // ─── Layout ───────────────────────────────────────────────────────
+
+  void toggleReadingPane() {
+    _showReadingPane = !_showReadingPane;
+    notifyListeners();
+  }
+
+  void toggleFolderPane() {
+    _showFolderPane = !_showFolderPane;
     notifyListeners();
   }
 }
