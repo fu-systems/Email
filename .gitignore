@@ -1,0 +1,31 @@
+# Dart/Flutter
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.metadata
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.DS_Store
+
+# Generated
+*.g.dart
+*.freezed.dart
+*.mocks.dart
+pubspec.lock
+
+# Platform
+linux/flutter/generated_plugin_registrant.cc
+linux/flutter/generated_plugin_registrant.h
+linux/flutter/generated_plugins.cmake
+
+# Secrets
+*.env
+*.key
+*.pem
