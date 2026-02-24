@@ -4,6 +4,8 @@ import '../theme/outlook_theme.dart';
 import '../providers/navigation_provider.dart';
 import '../providers/mail_provider.dart';
 import '../providers/account_provider.dart';
+import '../providers/calendar_provider.dart';
+import '../providers/contacts_provider.dart';
 import '../widgets/ribbon/ribbon_toolbar.dart';
 import '../widgets/navigation_bar.dart';
 import '../widgets/status_bar.dart';
@@ -266,8 +268,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   iconColor: OutlookTheme.primaryBlue,
                   isLarge: true,
                   onTap: () {
-                    context.read<NavigationProvider>();
-                    // CalendarView handles Today via provider
+                    context.read<CalendarProvider>().goToToday();
                   },
                 ),
               ],
@@ -278,17 +279,23 @@ class _HomeScreenState extends State<HomeScreen> {
                 RibbonItem(
                   label: 'Day',
                   icon: Icons.view_day,
-                  onTap: () {},
+                  onTap: () {
+                    context.read<CalendarProvider>().setViewType(CalendarViewType.day);
+                  },
                 ),
                 RibbonItem(
                   label: 'Week',
                   icon: Icons.view_week,
-                  onTap: () {},
+                  onTap: () {
+                    context.read<CalendarProvider>().setViewType(CalendarViewType.week);
+                  },
                 ),
                 RibbonItem(
                   label: 'Month',
                   icon: Icons.calendar_view_month,
-                  onTap: () {},
+                  onTap: () {
+                    context.read<CalendarProvider>().setViewType(CalendarViewType.month);
+                  },
                 ),
               ],
             ),
@@ -325,7 +332,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   icon: Icons.delete,
                   iconColor: OutlookTheme.flaggedColor,
                   isLarge: true,
-                  onTap: () {},
+                  onTap: () {
+                    final contactsProvider = context.read<ContactsProvider>();
+                    final selected = contactsProvider.selectedContact;
+                    if (selected != null) {
+                      contactsProvider.removeContact(selected.id);
+                    }
+                  },
                 ),
               ],
             ),
