@@ -177,7 +177,7 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
                     border: Border.all(color: OutlookTheme.dividerColor),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.08),
+                        color: Colors.black.withOpacity( 0.08),
                         blurRadius: 8,
                         offset: const Offset(0, 2),
                       ),
@@ -695,7 +695,7 @@ class _HeaderButtonState extends State<_HeaderButton> {
           width: 28,
           height: 20,
           color: _isHovered
-              ? Colors.white.withValues(alpha: 0.2)
+              ? Colors.white.withOpacity( 0.2)
               : Colors.transparent,
           child: Icon(widget.icon, size: 12, color: Colors.white),
         ),

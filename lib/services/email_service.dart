@@ -220,9 +220,9 @@ class EmailService {
     try {
       final info = msg.findContentInfo();
       return info.any((ci) =>
-          ci.disposition == enough.ContentDisposition.attachment ||
-          (ci.disposition == enough.ContentDisposition.inline &&
-              ci.mediaType?.top != enough.MediaToptype.text));
+          ci.contentDisposition?.disposition == enough.ContentDisposition.attachment ||
+          (ci.contentDisposition?.disposition == enough.ContentDisposition.inline &&
+              ci.contentType?.mediaType.top != enough.MediaToptype.text));
     } catch (_) {
       return false;
     }

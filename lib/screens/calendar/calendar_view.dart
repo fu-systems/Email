@@ -55,7 +55,7 @@ class _CalendarSidebar extends StatelessWidget {
             eventLoader: (day) => cal.getEventsForDate(day),
             calendarStyle: CalendarStyle(
               todayDecoration: BoxDecoration(
-                color: OutlookTheme.calendarToday.withValues(alpha: 0.15),
+                color: OutlookTheme.calendarToday.withOpacity( 0.15),
                 shape: BoxShape.circle,
               ),
               todayTextStyle: const TextStyle(
@@ -75,7 +75,7 @@ class _CalendarSidebar extends StatelessWidget {
               markersMaxCount: 3,
               outsideDaysVisible: true,
               outsideTextStyle: TextStyle(
-                color: OutlookTheme.textMuted.withValues(alpha: 0.5),
+                color: OutlookTheme.textMuted.withOpacity( 0.5),
               ),
               defaultTextStyle: const TextStyle(
                 fontFamily: OutlookTheme.fontFamily,
@@ -258,7 +258,7 @@ class _EventListPane extends StatelessWidget {
                         Icon(Icons.event_available,
                             size: 48,
                             color:
-                                OutlookTheme.textMuted.withValues(alpha: 0.4)),
+                                OutlookTheme.textMuted.withOpacity( 0.4)),
                         const SizedBox(height: 12),
                         Text(
                           'No events scheduled',

@@ -134,7 +134,7 @@ class _RibbonTabState extends State<_RibbonTab> {
             color: widget.isActive
                 ? OutlookTheme.ribbonBackground
                 : _isHovered
-                    ? OutlookTheme.primaryBlue.withValues(alpha: 0.8)
+                    ? OutlookTheme.primaryBlue.withOpacity( 0.8)
                     : Colors.transparent,
             border: widget.isActive
                 ? const Border(
