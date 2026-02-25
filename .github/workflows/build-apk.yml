@@ -27,17 +27,29 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Analyze code
-        run: flutter analyze --no-fatal-infos --no-fatal-warnings || true
-
       - name: Build APK (release)
-        run: flutter build apk --release 2>&1 | tee /tmp/build-output.txt; exit ${PIPESTATUS[0]}
+        id: build
+        run: |
+          flutter build apk --release 2>&1 | tee /tmp/build-output.txt
+          exit ${PIPESTATUS[0]}
 
-      - name: Show build output on failure
-        if: failure()
-        run: cat /tmp/build-output.txt || true
+      - name: Post build error to summary
+        if: failure() && steps.build.outcome == 'failure'
+        run: |
+          echo "## Build Failed" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          tail -100 /tmp/build-output.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload build log on failure
+        if: failure() && steps.build.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-error-log
+          path: /tmp/build-output.txt
 
       - name: Upload APK artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: look-in-release-apk
