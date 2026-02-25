@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../theme/outlook_theme.dart';
+import '../models/email_message.dart';
 import '../models/folder.dart';
 import '../providers/navigation_provider.dart';
 import '../providers/mail_provider.dart';
@@ -691,7 +692,7 @@ class _WindowButtonState extends State<_WindowButton> {
           width: 28,
           height: 20,
           color: _isHovered
-              ? Colors.white.withValues(alpha: 0.2)
+              ? Colors.white.withOpacity( 0.2)
               : Colors.transparent,
           child: Icon(widget.icon, size: 12, color: Colors.white),
         ),

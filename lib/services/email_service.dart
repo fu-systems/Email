@@ -37,7 +37,14 @@ class EmailService {
         await _imapClient!.startTls();
       }
 
-      await _imapClient!.login(account.username, account.password);
+      if (account.isOAuth && account.accessToken != null) {
+        await _imapClient!.authenticateWithOAuth2(
+          account.username,
+          account.accessToken!,
+        );
+      } else {
+        await _imapClient!.login(account.username, account.password);
+      }
       _isConnected = true;
     } catch (e) {
       _isConnected = false;
@@ -66,11 +73,19 @@ class EmailService {
       await _smtpClient!.startTls();
     }
 
-    await _smtpClient!.authenticate(
-      account.username,
-      account.password,
-      enough.AuthMechanism.plain,
-    );
+    if (account.isOAuth && account.accessToken != null) {
+      await _smtpClient!.authenticate(
+        account.username,
+        account.accessToken!,
+        enough.AuthMechanism.xoauth2,
+      );
+    } else {
+      await _smtpClient!.authenticate(
+        account.username,
+        account.password,
+        enough.AuthMechanism.plain,
+      );
+    }
 
     return _smtpClient!;
   }
@@ -220,9 +235,9 @@ class EmailService {
     try {
       final info = msg.findContentInfo();
       return info.any((ci) =>
-          ci.disposition == enough.ContentDisposition.attachment ||
-          (ci.disposition == enough.ContentDisposition.inline &&
-              ci.mediaType?.top != enough.MediaToptype.text));
+          ci.contentDisposition?.disposition == enough.ContentDisposition.attachment ||
+          (ci.contentDisposition?.disposition == enough.ContentDisposition.inline &&
+              ci.contentType?.mediaType.top != enough.MediaToptype.text));
     } catch (_) {
       return false;
     }

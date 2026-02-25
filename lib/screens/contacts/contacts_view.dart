@@ -120,7 +120,7 @@ class _LetterButtonState extends State<_LetterButton> {
                   ? Colors.white
                   : widget.isAvailable
                       ? OutlookTheme.textPrimary
-                      : OutlookTheme.textMuted.withValues(alpha: 0.4),
+                      : OutlookTheme.textMuted.withOpacity( 0.4),
             ),
           ),
         ),
@@ -271,7 +271,7 @@ class _ContactTileState extends State<_ContactTile> {
                 width: 36,
                 height: 36,
                 decoration: BoxDecoration(
-                  color: OutlookTheme.primaryBlue.withValues(alpha: 0.12),
+                  color: OutlookTheme.primaryBlue.withOpacity( 0.12),
                   shape: BoxShape.circle,
                 ),
                 child: Center(
@@ -339,7 +339,7 @@ class _ContactDetailPane extends StatelessWidget {
             children: [
               Icon(Icons.person_outline,
                   size: 48,
-                  color: OutlookTheme.textMuted.withValues(alpha: 0.4)),
+                  color: OutlookTheme.textMuted.withOpacity( 0.4)),
               const SizedBox(height: 12),
               Text(
                 'Select a contact to view details',
@@ -372,7 +372,7 @@ class _ContactDetailPane extends StatelessWidget {
                   width: 64,
                   height: 64,
                   decoration: BoxDecoration(
-                    color: OutlookTheme.primaryBlue.withValues(alpha: 0.12),
+                    color: OutlookTheme.primaryBlue.withOpacity( 0.12),
                     shape: BoxShape.circle,
                   ),
                   child: Center(

@@ -1,3 +1,9 @@
+/// Authentication type for an email account.
+enum AuthType { password, oauth2 }
+
+/// OAuth provider identifier.
+enum OAuthProvider { google, microsoft, yahoo }
+
 /// Represents a configured email account with IMAP and SMTP settings.
 class EmailAccount {
   final String id;
@@ -14,9 +20,16 @@ class EmailAccount {
   final int smtpPort;
   final SmtpSecurity smtpSecurity;
 
-  // Credentials
+  // Credentials (password auth)
   final String username;
   final String password;
+
+  // OAuth fields
+  final AuthType authType;
+  final OAuthProvider? oauthProvider;
+  final String? accessToken;
+  final String? refreshToken;
+  final DateTime? tokenExpiry;
 
   // Account state
   final bool isDefault;
@@ -34,11 +47,23 @@ class EmailAccount {
     required this.smtpPort,
     this.smtpSecurity = SmtpSecurity.starttls,
     required this.username,
-    required this.password,
+    this.password = '',
+    this.authType = AuthType.password,
+    this.oauthProvider,
+    this.accessToken,
+    this.refreshToken,
+    this.tokenExpiry,
     this.isDefault = false,
     this.isEnabled = true,
     this.signature,
   });
+
+  bool get isOAuth => authType == AuthType.oauth2;
+
+  bool get isTokenExpired {
+    if (tokenExpiry == null) return true;
+    return DateTime.now().isAfter(tokenExpiry!.subtract(const Duration(minutes: 5)));
+  }
 
   EmailAccount copyWith({
     String? id,
@@ -52,6 +77,11 @@ class EmailAccount {
     SmtpSecurity? smtpSecurity,
     String? username,
     String? password,
+    AuthType? authType,
+    OAuthProvider? oauthProvider,
+    String? accessToken,
+    String? refreshToken,
+    DateTime? tokenExpiry,
     bool? isDefault,
     bool? isEnabled,
     String? signature,
@@ -68,6 +98,11 @@ class EmailAccount {
       smtpSecurity: smtpSecurity ?? this.smtpSecurity,
       username: username ?? this.username,
       password: password ?? this.password,
+      authType: authType ?? this.authType,
+      oauthProvider: oauthProvider ?? this.oauthProvider,
+      accessToken: accessToken ?? this.accessToken,
+      refreshToken: refreshToken ?? this.refreshToken,
+      tokenExpiry: tokenExpiry ?? this.tokenExpiry,
       isDefault: isDefault ?? this.isDefault,
       isEnabled: isEnabled ?? this.isEnabled,
       signature: signature ?? this.signature,
@@ -86,6 +121,11 @@ class EmailAccount {
         'smtpSecurity': smtpSecurity.name,
         'username': username,
         'password': password,
+        'authType': authType.name,
+        'oauthProvider': oauthProvider?.name,
+        'accessToken': accessToken,
+        'refreshToken': refreshToken,
+        'tokenExpiry': tokenExpiry?.toIso8601String(),
         'isDefault': isDefault ? 1 : 0,
         'isEnabled': isEnabled ? 1 : 0,
         'signature': signature,
@@ -103,11 +143,36 @@ class EmailAccount {
         smtpSecurity:
             SmtpSecurity.values.byName(map['smtpSecurity'] as String),
         username: map['username'] as String,
-        password: map['password'] as String,
+        password: (map['password'] as String?) ?? '',
+        authType: _parseAuthType(map['authType'] as String?),
+        oauthProvider: _parseOAuthProvider(map['oauthProvider'] as String?),
+        accessToken: map['accessToken'] as String?,
+        refreshToken: map['refreshToken'] as String?,
+        tokenExpiry: map['tokenExpiry'] != null
+            ? DateTime.tryParse(map['tokenExpiry'] as String)
+            : null,
         isDefault: (map['isDefault'] as int) == 1,
         isEnabled: (map['isEnabled'] as int) == 1,
         signature: map['signature'] as String?,
       );
+
+  static AuthType _parseAuthType(String? value) {
+    if (value == null) return AuthType.password;
+    try {
+      return AuthType.values.byName(value);
+    } catch (_) {
+      return AuthType.password;
+    }
+  }
+
+  static OAuthProvider? _parseOAuthProvider(String? value) {
+    if (value == null) return null;
+    try {
+      return OAuthProvider.values.byName(value);
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
 enum ImapSecurity { none, ssl, starttls }
@@ -124,6 +189,8 @@ class EmailProviderConfig {
   final String smtpHost;
   final int smtpPort;
   final SmtpSecurity smtpSecurity;
+  final bool supportsOAuth;
+  final OAuthProvider? oauthProvider;
 
   const EmailProviderConfig({
     required this.name,
@@ -134,6 +201,8 @@ class EmailProviderConfig {
     required this.smtpHost,
     required this.smtpPort,
     required this.smtpSecurity,
+    this.supportsOAuth = false,
+    this.oauthProvider,
   });
 
   static const List<EmailProviderConfig> knownProviders = [
@@ -146,6 +215,8 @@ class EmailProviderConfig {
       smtpHost: 'smtp.gmail.com',
       smtpPort: 587,
       smtpSecurity: SmtpSecurity.starttls,
+      supportsOAuth: true,
+      oauthProvider: OAuthProvider.google,
     ),
     EmailProviderConfig(
       name: 'Outlook.com',
@@ -156,6 +227,8 @@ class EmailProviderConfig {
       smtpHost: 'smtp.office365.com',
       smtpPort: 587,
       smtpSecurity: SmtpSecurity.starttls,
+      supportsOAuth: true,
+      oauthProvider: OAuthProvider.microsoft,
     ),
     EmailProviderConfig(
       name: 'Outlook.com',
@@ -166,6 +239,8 @@ class EmailProviderConfig {
       smtpHost: 'smtp.office365.com',
       smtpPort: 587,
       smtpSecurity: SmtpSecurity.starttls,
+      supportsOAuth: true,
+      oauthProvider: OAuthProvider.microsoft,
     ),
     EmailProviderConfig(
       name: 'Yahoo Mail',
@@ -176,6 +251,8 @@ class EmailProviderConfig {
       smtpHost: 'smtp.mail.yahoo.com',
       smtpPort: 587,
       smtpSecurity: SmtpSecurity.starttls,
+      supportsOAuth: true,
+      oauthProvider: OAuthProvider.yahoo,
     ),
     EmailProviderConfig(
       name: 'iCloud',

@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../theme/outlook_theme.dart';
@@ -5,8 +7,48 @@ import '../providers/mail_provider.dart';
 import '../providers/navigation_provider.dart';
 
 /// Outlook 2013-style status bar at the bottom of the window.
-class StatusBar extends StatelessWidget {
+class StatusBar extends StatefulWidget {
   const StatusBar({super.key});
+
+  @override
+  State<StatusBar> createState() => _StatusBarState();
+}
+
+class _StatusBarState extends State<StatusBar> {
+  bool _isOnline = true;
+  Timer? _connectivityTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkConnectivity();
+    // Poll connectivity every 30 seconds
+    _connectivityTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => _checkConnectivity(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _connectivityTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _checkConnectivity() async {
+    try {
+      final result = await InternetAddress.lookup('example.com')
+          .timeout(const Duration(seconds: 5));
+      final online = result.isNotEmpty && result[0].rawAddress.isNotEmpty;
+      if (mounted && online != _isOnline) {
+        setState(() => _isOnline = online);
+      }
+    } catch (_) {
+      if (mounted && _isOnline) {
+        setState(() => _isOnline = false);
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -19,8 +61,13 @@ class StatusBar extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Row(
         children: [
-          // Left: status info
-          if (nav.currentSection == NavigationSection.mail) ...[
+          // Left: connectivity / sync status
+          if (!_isOnline)
+            const _StatusItem(
+              icon: Icons.cloud_off,
+              text: 'Working Offline',
+            )
+          else if (nav.currentSection == NavigationSection.mail) ...[
             if (mail.isSyncing)
               const _StatusItem(
                 icon: Icons.sync,
@@ -37,7 +84,7 @@ class StatusBar extends StatelessWidget {
                 text: mail.error!,
               )
             else
-              _StatusItem(
+              const _StatusItem(
                 icon: Icons.check_circle_outline,
                 text: 'Connected',
               ),
@@ -49,7 +96,7 @@ class StatusBar extends StatelessWidget {
               ),
           ],
           const Spacer(),
-          // Right: view controls (placeholder)
+          // Right: view controls
           const _StatusItem(
             icon: Icons.view_agenda_outlined,
             text: '',

@@ -1,13 +1,16 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../models/email_account.dart';
 import '../services/database_service.dart';
+import '../services/crypto_service.dart';
+import '../services/oauth_service.dart';
 
 /// Manages email accounts -- loading, saving, adding, removing.
+/// Persists to SQLite via DataCache with encrypted credentials.
+/// Handles OAuth token refresh for OAuth-authenticated accounts.
 class AccountProvider extends ChangeNotifier {
   final DataCache _cache = DataCache.instance;
+  CryptoService? _crypto;
   bool _isInitialized = false;
   String? _activeAccountId;
 
@@ -20,38 +23,69 @@ class AccountProvider extends ChangeNotifier {
   }
 
   AccountProvider() {
-    _loadAccounts();
+    _initialize();
   }
 
-  Future<void> _loadAccounts() async {
+  Future<void> _initialize() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getStringList('accounts') ?? [];
-      for (final json in raw) {
-        final map = jsonDecode(json) as Map<String, dynamic>;
-        final account = EmailAccount.fromMap(map);
-        _cache.saveAccount(account);
+      await _cache.initialize();
+      _crypto = await CryptoService.getInstance();
+
+      // Decrypt secrets for in-memory accounts
+      for (final account in _cache.accounts) {
+        final decrypted = account.copyWith(
+          password: account.password.isNotEmpty
+              ? _crypto!.decrypt(account.password)
+              : '',
+          accessToken: account.accessToken != null
+              ? _crypto!.decrypt(account.accessToken!)
+              : null,
+          refreshToken: account.refreshToken != null
+              ? _crypto!.decrypt(account.refreshToken!)
+              : null,
+        );
+        _cache.accountsMap[account.id] = decrypted;
       }
-      _activeAccountId = prefs.getString('activeAccountId');
+
+      if (accounts.isNotEmpty) {
+        _activeAccountId = accounts.first.id;
+      }
     } catch (e) {
-      print('Error loading accounts: $e');
+      debugPrint('Error initializing accounts: $e');
     }
     _isInitialized = true;
     notifyListeners();
   }
 
+  /// Encrypt sensitive fields before persisting to DB.
+  Map<String, dynamic> _encryptedMap(EmailAccount account) {
+    final encrypted = account.copyWith(
+      password: account.password.isNotEmpty
+          ? (_crypto?.encrypt(account.password) ?? account.password)
+          : '',
+      accessToken: account.accessToken != null
+          ? (_crypto?.encrypt(account.accessToken!) ?? account.accessToken)
+          : null,
+      refreshToken: account.refreshToken != null
+          ? (_crypto?.encrypt(account.refreshToken!) ?? account.refreshToken)
+          : null,
+    );
+    return encrypted.toMap();
+  }
+
   Future<void> addAccount(EmailAccount account) async {
-    _cache.saveAccount(account);
+    _cache.accountsMap[account.id] = account; // plaintext in memory
+    _cache.db?.upsertAccount(_encryptedMap(account)); // encrypted in DB
+
     if (accounts.length == 1) {
       _activeAccountId = account.id;
     }
-    await _persistAccounts();
     notifyListeners();
   }
 
   Future<void> updateAccount(EmailAccount account) async {
-    _cache.saveAccount(account);
-    await _persistAccounts();
+    _cache.accountsMap[account.id] = account;
+    _cache.db?.upsertAccount(_encryptedMap(account));
     notifyListeners();
   }
 
@@ -60,7 +94,6 @@ class AccountProvider extends ChangeNotifier {
     if (_activeAccountId == id) {
       _activeAccountId = accounts.isNotEmpty ? accounts.first.id : null;
     }
-    await _persistAccounts();
     notifyListeners();
   }
 
@@ -71,12 +104,36 @@ class AccountProvider extends ChangeNotifier {
 
   String generateAccountId() => const Uuid().v4();
 
-  Future<void> _persistAccounts() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = accounts.map((a) => jsonEncode(a.toMap())).toList();
-    await prefs.setStringList('accounts', raw);
-    if (_activeAccountId != null) {
-      await prefs.setString('activeAccountId', _activeAccountId!);
+  // ─── OAuth Token Management ───────────────────────────────────────────
+
+  /// Ensure the account has a valid access token.
+  /// Refreshes the token if expired. Returns the updated account,
+  /// or null if refresh fails.
+  Future<EmailAccount?> ensureValidToken(EmailAccount account) async {
+    if (!account.isOAuth) return account;
+    if (!account.isTokenExpired) return account;
+    if (account.refreshToken == null || account.oauthProvider == null) {
+      return null;
+    }
+
+    try {
+      final result = await OAuthService.refreshAccessToken(
+        account.oauthProvider!,
+        account.refreshToken!,
+        account.emailAddress,
+      );
+
+      final updated = account.copyWith(
+        accessToken: result.accessToken,
+        refreshToken: result.refreshToken,
+        tokenExpiry: result.expiry,
+      );
+
+      await updateAccount(updated);
+      return updated;
+    } catch (e) {
+      debugPrint('Token refresh failed: $e');
+      return null;
     }
   }
 }

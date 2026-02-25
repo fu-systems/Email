@@ -227,7 +227,7 @@ class _CloseButtonState extends State<_CloseButton> {
           width: 28,
           height: 20,
           color: _hovered
-              ? Colors.white.withValues(alpha: 0.2)
+              ? Colors.white.withOpacity( 0.2)
               : Colors.transparent,
           child: const Icon(Icons.close, size: 12, color: Colors.white),
         ),

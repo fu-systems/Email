@@ -41,6 +41,9 @@ dependencies:
   # Crypto for password storage
   encrypt: ^5.0.3
 
+  # OAuth / HTTP
+  http: ^1.2.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -50,6 +53,3 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-
-  assets:
-    - assets/icons/
