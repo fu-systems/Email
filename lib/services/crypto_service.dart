@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:encrypt/encrypt.dart' as enc;
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
@@ -28,14 +29,27 @@ class CryptoService {
 
     if (await keyFile.exists()) {
       final bytes = await keyFile.readAsBytes();
-      _key = enc.Key(bytes);
+      if (bytes.length == _keyLength) {
+        _key = enc.Key(Uint8List.fromList(bytes));
+      } else {
+        // Key file is corrupt or wrong length — regenerate
+        final newKey = _generateKey();
+        _key = enc.Key(newKey);
+        await keyFile.writeAsBytes(newKey);
+      }
     } else {
       // Generate a random 256-bit key
-      final random = Random.secure();
-      final bytes = List<int>.generate(_keyLength, (_) => random.nextInt(256));
-      _key = enc.Key.fromUtf8(String.fromCharCodes(bytes));
-      await keyFile.writeAsBytes(_key.bytes);
+      final newKey = _generateKey();
+      _key = enc.Key(newKey);
+      await keyFile.writeAsBytes(newKey);
     }
+  }
+
+  static Uint8List _generateKey() {
+    final random = Random.secure();
+    return Uint8List.fromList(
+      List<int>.generate(_keyLength, (_) => random.nextInt(256)),
+    );
   }
 
   /// Encrypt a plaintext string. Returns base64-encoded "iv:ciphertext".
