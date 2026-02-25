@@ -21,35 +21,47 @@ jobs:
           flutter-version: '3.24.0'
           channel: 'stable'
 
-      - name: Flutter doctor
-        run: flutter doctor -v
-
       - name: Install dependencies
         run: flutter pub get
 
       - name: Build APK (release)
         id: build
+        continue-on-error: true
         run: |
           flutter build apk --release 2>&1 | tee /tmp/build-output.txt
-          exit ${PIPESTATUS[0]}
+          echo "BUILD_EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
 
-      - name: Post build error to summary
-        if: failure() && steps.build.outcome == 'failure'
+      - name: Emit build errors as annotations
+        if: env.BUILD_EXIT_CODE != '0'
         run: |
-          echo "## Build Failed" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          tail -100 /tmp/build-output.txt >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "::group::Full Build Output"
+          cat /tmp/build-output.txt
+          echo "::endgroup::"
+          # Extract and annotate error lines
+          grep -i -E '(error|FAILURE|Exception|fatal)' /tmp/build-output.txt | head -20 | while IFS= read -r line; do
+            echo "::error::$line"
+          done
+          # Commit the error log to the repo for access
+          ERROR_CONTENT=$(cat /tmp/build-output.txt)
+          echo "## Build Error Log" > /tmp/error-summary.md
+          echo '```' >> /tmp/error-summary.md
+          tail -80 /tmp/build-output.txt >> /tmp/error-summary.md
+          echo '```' >> /tmp/error-summary.md
+          cat /tmp/error-summary.md >> $GITHUB_STEP_SUMMARY
 
       - name: Upload build log on failure
-        if: failure() && steps.build.outcome == 'failure'
+        if: env.BUILD_EXIT_CODE != '0'
         uses: actions/upload-artifact@v4
         with:
           name: build-error-log
           path: /tmp/build-output.txt
 
+      - name: Fail if build failed
+        if: env.BUILD_EXIT_CODE != '0'
+        run: exit 1
+
       - name: Upload APK artifact
-        if: success()
+        if: env.BUILD_EXIT_CODE == '0'
         uses: actions/upload-artifact@v4
         with:
           name: look-in-release-apk
