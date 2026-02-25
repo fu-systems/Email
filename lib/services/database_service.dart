@@ -26,7 +26,7 @@ class AppDatabase extends GeneratedDatabase {
   }
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   Iterable<TableInfo<Table, DataClass>> get allTables => [];
@@ -46,10 +46,15 @@ class AppDatabase extends GeneratedDatabase {
               smtpPort INTEGER NOT NULL,
               smtpSecurity TEXT NOT NULL,
               username TEXT NOT NULL,
-              password TEXT NOT NULL,
+              password TEXT NOT NULL DEFAULT '',
               isDefault INTEGER NOT NULL DEFAULT 0,
               isEnabled INTEGER NOT NULL DEFAULT 1,
-              signature TEXT
+              signature TEXT,
+              authType TEXT NOT NULL DEFAULT 'password',
+              oauthProvider TEXT,
+              accessToken TEXT,
+              refreshToken TEXT,
+              tokenExpiry TEXT
             )
           ''');
           await customStatement('''
@@ -134,6 +139,21 @@ class AppDatabase extends GeneratedDatabase {
             )
           ''');
         },
+        onUpgrade: (m, from, to) async {
+          if (from < 2) {
+            // Add OAuth columns to accounts table
+            await customStatement(
+                "ALTER TABLE accounts ADD COLUMN authType TEXT NOT NULL DEFAULT 'password'");
+            await customStatement(
+                'ALTER TABLE accounts ADD COLUMN oauthProvider TEXT');
+            await customStatement(
+                'ALTER TABLE accounts ADD COLUMN accessToken TEXT');
+            await customStatement(
+                'ALTER TABLE accounts ADD COLUMN refreshToken TEXT');
+            await customStatement(
+                'ALTER TABLE accounts ADD COLUMN tokenExpiry TEXT');
+          }
+        },
       );
 
   // ─── Account Operations ────────────────────────────────────────────────
@@ -148,14 +168,17 @@ class AppDatabase extends GeneratedDatabase {
       '''INSERT OR REPLACE INTO accounts
          (id, displayName, emailAddress, imapHost, imapPort, imapSecurity,
           smtpHost, smtpPort, smtpSecurity, username, password,
-          isDefault, isEnabled, signature)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+          isDefault, isEnabled, signature,
+          authType, oauthProvider, accessToken, refreshToken, tokenExpiry)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
       [
         data['id'], data['displayName'], data['emailAddress'],
         data['imapHost'], data['imapPort'], data['imapSecurity'],
         data['smtpHost'], data['smtpPort'], data['smtpSecurity'],
         data['username'], data['password'],
         data['isDefault'], data['isEnabled'], data['signature'],
+        data['authType'], data['oauthProvider'],
+        data['accessToken'], data['refreshToken'], data['tokenExpiry'],
       ],
     );
   }

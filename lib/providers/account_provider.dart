@@ -3,9 +3,11 @@ import 'package:uuid/uuid.dart';
 import '../models/email_account.dart';
 import '../services/database_service.dart';
 import '../services/crypto_service.dart';
+import '../services/oauth_service.dart';
 
 /// Manages email accounts -- loading, saving, adding, removing.
 /// Persists to SQLite via DataCache with encrypted credentials.
+/// Handles OAuth token refresh for OAuth-authenticated accounts.
 class AccountProvider extends ChangeNotifier {
   final DataCache _cache = DataCache.instance;
   CryptoService? _crypto;
@@ -26,16 +28,22 @@ class AccountProvider extends ChangeNotifier {
 
   Future<void> _initialize() async {
     try {
-      // Initialize the database-backed cache and crypto service
       await _cache.initialize();
       _crypto = await CryptoService.getInstance();
 
-      // Decrypt passwords for in-memory accounts
+      // Decrypt secrets for in-memory accounts
       for (final account in _cache.accounts) {
         final decrypted = account.copyWith(
-          password: _crypto!.decrypt(account.password),
+          password: account.password.isNotEmpty
+              ? _crypto!.decrypt(account.password)
+              : '',
+          accessToken: account.accessToken != null
+              ? _crypto!.decrypt(account.accessToken!)
+              : null,
+          refreshToken: account.refreshToken != null
+              ? _crypto!.decrypt(account.refreshToken!)
+              : null,
         );
-        // Update in-memory only (don't re-write to DB)
         _cache.accountsMap[account.id] = decrypted;
       }
 
@@ -49,13 +57,25 @@ class AccountProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> addAccount(EmailAccount account) async {
-    // Store with encrypted password in DB, plaintext in memory
+  /// Encrypt sensitive fields before persisting to DB.
+  Map<String, dynamic> _encryptedMap(EmailAccount account) {
     final encrypted = account.copyWith(
-      password: _crypto?.encrypt(account.password) ?? account.password,
+      password: account.password.isNotEmpty
+          ? (_crypto?.encrypt(account.password) ?? account.password)
+          : '',
+      accessToken: account.accessToken != null
+          ? (_crypto?.encrypt(account.accessToken!) ?? account.accessToken)
+          : null,
+      refreshToken: account.refreshToken != null
+          ? (_crypto?.encrypt(account.refreshToken!) ?? account.refreshToken)
+          : null,
     );
+    return encrypted.toMap();
+  }
+
+  Future<void> addAccount(EmailAccount account) async {
     _cache.accountsMap[account.id] = account; // plaintext in memory
-    _cache.db?.upsertAccount(encrypted.toMap()); // encrypted in DB
+    _cache.db?.upsertAccount(_encryptedMap(account)); // encrypted in DB
 
     if (accounts.length == 1) {
       _activeAccountId = account.id;
@@ -64,11 +84,8 @@ class AccountProvider extends ChangeNotifier {
   }
 
   Future<void> updateAccount(EmailAccount account) async {
-    final encrypted = account.copyWith(
-      password: _crypto?.encrypt(account.password) ?? account.password,
-    );
     _cache.accountsMap[account.id] = account;
-    _cache.db?.upsertAccount(encrypted.toMap());
+    _cache.db?.upsertAccount(_encryptedMap(account));
     notifyListeners();
   }
 
@@ -86,4 +103,37 @@ class AccountProvider extends ChangeNotifier {
   }
 
   String generateAccountId() => const Uuid().v4();
+
+  // ─── OAuth Token Management ───────────────────────────────────────────
+
+  /// Ensure the account has a valid access token.
+  /// Refreshes the token if expired. Returns the updated account,
+  /// or null if refresh fails.
+  Future<EmailAccount?> ensureValidToken(EmailAccount account) async {
+    if (!account.isOAuth) return account;
+    if (!account.isTokenExpired) return account;
+    if (account.refreshToken == null || account.oauthProvider == null) {
+      return null;
+    }
+
+    try {
+      final result = await OAuthService.refreshAccessToken(
+        account.oauthProvider!,
+        account.refreshToken!,
+        account.emailAddress,
+      );
+
+      final updated = account.copyWith(
+        accessToken: result.accessToken,
+        refreshToken: result.refreshToken,
+        tokenExpiry: result.expiry,
+      );
+
+      await updateAccount(updated);
+      return updated;
+    } catch (e) {
+      debugPrint('Token refresh failed: $e');
+      return null;
+    }
+  }
 }
