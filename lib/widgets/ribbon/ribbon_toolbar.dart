@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../../theme/outlook_theme.dart';
+
 import '../../providers/navigation_provider.dart';
+import '../../theme/outlook_theme.dart';
 
 /// Outlook 2013-style ribbon toolbar with tabs and grouped action buttons.
 class RibbonToolbar extends StatelessWidget {
@@ -17,20 +18,19 @@ class RibbonToolbar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final nav = context.watch<NavigationProvider>();
-    final activeTab = nav.currentRibbonTab;
+    final activeTab = tabs.any((t) => t.label == nav.currentRibbonTab)
+        ? nav.currentRibbonTab
+        : tabs.first.label;
 
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Tab row
         Container(
           height: OutlookTheme.ribbonTabHeight,
           color: OutlookTheme.primaryBlue,
           child: Row(
             children: [
-              // File tab (always present, styled differently)
               _FileTab(onTap: onFileTab),
-              // Content tabs
               ...tabs.map((tab) => _RibbonTab(
                     label: tab.label,
                     isActive: activeTab == tab.label,
@@ -40,9 +40,9 @@ class RibbonToolbar extends StatelessWidget {
             ],
           ),
         ),
-        // Ribbon content area
         Container(
           height: OutlookTheme.ribbonHeight - OutlookTheme.ribbonTabHeight,
+          width: double.infinity,
           decoration: OutlookTheme.ribbonDecoration,
           child: _buildActiveTabContent(activeTab),
         ),
@@ -54,47 +54,57 @@ class RibbonToolbar extends StatelessWidget {
     final tab = tabs.where((t) => t.label == activeTab).firstOrNull;
     if (tab == null) return const SizedBox.shrink();
 
-    return Padding(
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          for (int i = 0; i < tab.groups.length; i++) ...[
-            _RibbonGroup(group: tab.groups[i]),
-            if (i < tab.groups.length - 1) const _RibbonGroupSeparator(),
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (int i = 0; i < tab.groups.length; i++) ...[
+              _RibbonGroup(group: tab.groups[i]),
+              if (i < tab.groups.length - 1) const _RibbonGroupSeparator(),
+            ],
           ],
-          const Spacer(),
-        ],
+        ),
       ),
     );
   }
 }
 
-class _FileTab extends StatelessWidget {
+class _FileTab extends StatefulWidget {
   final VoidCallback? onTap;
 
   const _FileTab({this.onTap});
 
   @override
+  State<_FileTab> createState() => _FileTabState();
+}
+
+class _FileTabState extends State<_FileTab> {
+  bool _hovered = false;
+
+  @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: OutlookTheme.darkBlue,
-          border: Border.all(color: Colors.transparent),
-        ),
-        child: const Text(
-          'FILE',
-          style: TextStyle(
-            fontFamily: OutlookTheme.fontFamily,
-            fontFamilyFallback: OutlookTheme.fontFamilyFallback,
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            color: Colors.white,
-            letterSpacing: 0.5,
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 18),
+          alignment: Alignment.center,
+          color: _hovered ? OutlookTheme.lightBlue : OutlookTheme.darkBlue,
+          child: const Text(
+            'FILE',
+            style: TextStyle(
+              fontFamily: OutlookTheme.fontFamily,
+              fontFamilyFallback: OutlookTheme.fontFamilyFallback,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: Colors.white,
+              letterSpacing: 0.5,
+            ),
           ),
         ),
       ),
@@ -134,14 +144,8 @@ class _RibbonTabState extends State<_RibbonTab> {
             color: widget.isActive
                 ? OutlookTheme.ribbonBackground
                 : _isHovered
-                    ? OutlookTheme.primaryBlue.withValues(alpha: 0.8)
+                    ? Colors.white.withValues(alpha: 0.15)
                     : Colors.transparent,
-            border: widget.isActive
-                ? const Border(
-                    left: BorderSide(color: OutlookTheme.dividerColor),
-                    right: BorderSide(color: OutlookTheme.dividerColor),
-                  )
-                : null,
           ),
           child: Text(
             widget.label.toUpperCase(),
@@ -149,11 +153,8 @@ class _RibbonTabState extends State<_RibbonTab> {
               fontFamily: OutlookTheme.fontFamily,
               fontFamilyFallback: OutlookTheme.fontFamilyFallback,
               fontSize: 12,
-              fontWeight:
-                  widget.isActive ? FontWeight.w600 : FontWeight.w400,
-              color: widget.isActive
-                  ? OutlookTheme.primaryBlue
-                  : Colors.white,
+              fontWeight: widget.isActive ? FontWeight.w600 : FontWeight.w400,
+              color: widget.isActive ? OutlookTheme.primaryBlue : Colors.white,
               letterSpacing: 0.3,
             ),
           ),
@@ -170,32 +171,76 @@ class _RibbonGroup extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Large buttons stand alone; consecutive small buttons stack in
+    // columns of three, as in Office.
+    final children = <Widget>[];
+    var smallRun = <RibbonItem>[];
+    void flush() {
+      if (smallRun.isEmpty) return;
+      for (var i = 0; i < smallRun.length; i += 3) {
+        final column = smallRun.sublist(i, (i + 3).clamp(0, smallRun.length));
+        children.add(Column(
+          mainAxisAlignment: MainAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [for (final item in column) _SmallRibbonButton(item: item)],
+        ));
+      }
+      smallRun = [];
+    }
+
+    for (final item in group.items) {
+      if (item.isLarge) {
+        flush();
+        children.add(_LargeRibbonButton(item: item));
+      } else {
+        smallRun.add(item);
+      }
+    }
+    flush();
+
     return Column(
       children: [
-        // Buttons area
         Expanded(
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 3),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: group.items.map((item) {
-                if (item.isLarge) {
-                  return _LargeRibbonButton(item: item);
-                }
-                return _SmallRibbonButton(item: item);
-              }).toList(),
+              children: children,
             ),
           ),
         ),
-        // Group label
-        Container(
+        Padding(
           padding: const EdgeInsets.only(bottom: 2),
           child: Text(group.label, style: OutlookTheme.ribbonGroupLabel),
         ),
       ],
     );
   }
+}
+
+Future<void> _showItemMenu(BuildContext context, RibbonItem item) async {
+  final box = context.findRenderObject() as RenderBox?;
+  final overlay = Overlay.of(context).context.findRenderObject() as RenderBox?;
+  if (box == null || overlay == null) return;
+  final origin = box.localToGlobal(Offset(0, box.size.height), ancestor: overlay);
+  final selected = await showMenu<int>(
+    context: context,
+    position: RelativeRect.fromRect(
+      Rect.fromLTWH(origin.dx, origin.dy, box.size.width, 1),
+      Offset.zero & overlay.size,
+    ),
+    items: [
+      for (var i = 0; i < item.menu!.length; i++)
+        CheckedPopupMenuItem<int>(
+          value: i,
+          checked: item.menu![i].isChecked,
+          height: 30,
+          child: Text(item.menu![i].label, style: const TextStyle(fontSize: 12.5)),
+        ),
+    ],
+  );
+  if (selected != null) item.menu![selected].onTap();
 }
 
 class _LargeRibbonButton extends StatefulWidget {
@@ -212,38 +257,59 @@ class _LargeRibbonButtonState extends State<_LargeRibbonButton> {
 
   @override
   Widget build(BuildContext context) {
-    return MouseRegion(
-      onEnter: (_) => setState(() => _isHovered = true),
-      onExit: (_) => setState(() => _isHovered = false),
-      child: GestureDetector(
-        onTap: widget.item.onTap,
-        child: Container(
-          width: 60,
-          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-          decoration: BoxDecoration(
-            color: _isHovered ? OutlookTheme.hoverColor : Colors.transparent,
-            borderRadius: BorderRadius.circular(2),
-            border: _isHovered
-                ? Border.all(color: OutlookTheme.selectedItemBorder)
-                : Border.all(color: Colors.transparent),
-          ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                widget.item.icon,
-                size: 28,
-                color: widget.item.iconColor ?? OutlookTheme.primaryBlue,
+    final item = widget.item;
+    final enabled = item.isEnabled;
+    final highlighted = (_isHovered && enabled) || item.isChecked;
+    return Tooltip(
+      message: item.tooltip ?? item.label.replaceAll('\n', ' '),
+      waitDuration: const Duration(milliseconds: 600),
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _isHovered = true),
+        onExit: (_) => setState(() => _isHovered = false),
+        child: GestureDetector(
+          onTap: !enabled
+              ? null
+              : item.menu != null
+                  ? () => _showItemMenu(context, item)
+                  : item.onTap,
+          child: Container(
+            width: 62,
+            padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 2),
+            decoration: BoxDecoration(
+              color: item.isChecked
+                  ? OutlookTheme.selectedItemBackground
+                  : highlighted
+                      ? OutlookTheme.hoverColor
+                      : Colors.transparent,
+              borderRadius: BorderRadius.circular(2),
+              border: Border.all(
+                color: highlighted
+                    ? OutlookTheme.selectedItemBorder
+                    : Colors.transparent,
               ),
-              const SizedBox(height: 2),
-              Text(
-                widget.item.label,
-                style: OutlookTheme.ribbonButtonLabel,
-                textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.start,
+              children: [
+                Icon(
+                  item.icon,
+                  size: 28,
+                  color: enabled
+                      ? item.iconColor ?? OutlookTheme.primaryBlue
+                      : OutlookTheme.textMuted.withValues(alpha: 0.6),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  item.menu != null ? '${item.label} ▾' : item.label,
+                  style: OutlookTheme.ribbonButtonLabel.copyWith(
+                    color: enabled ? null : OutlookTheme.textMuted,
+                  ),
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -265,33 +331,54 @@ class _SmallRibbonButtonState extends State<_SmallRibbonButton> {
 
   @override
   Widget build(BuildContext context) {
-    return MouseRegion(
-      onEnter: (_) => setState(() => _isHovered = true),
-      onExit: (_) => setState(() => _isHovered = false),
-      child: Tooltip(
-        message: widget.item.tooltip ?? widget.item.label,
+    final item = widget.item;
+    final enabled = item.isEnabled;
+    final highlighted = (_isHovered && enabled) || item.isChecked;
+    return Tooltip(
+      message: item.tooltip ?? item.label,
+      waitDuration: const Duration(milliseconds: 600),
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _isHovered = true),
+        onExit: (_) => setState(() => _isHovered = false),
         child: GestureDetector(
-          onTap: widget.item.onTap,
+          onTap: !enabled
+              ? null
+              : item.menu != null
+                  ? () => _showItemMenu(context, item)
+                  : item.onTap,
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+            height: 24,
+            padding: const EdgeInsets.symmetric(horizontal: 5),
             decoration: BoxDecoration(
-              color:
-                  _isHovered ? OutlookTheme.hoverColor : Colors.transparent,
+              color: item.isChecked
+                  ? OutlookTheme.selectedItemBackground
+                  : highlighted
+                      ? OutlookTheme.hoverColor
+                      : Colors.transparent,
               borderRadius: BorderRadius.circular(2),
-              border: _isHovered
-                  ? Border.all(color: OutlookTheme.selectedItemBorder)
-                  : Border.all(color: Colors.transparent),
+              border: Border.all(
+                color: highlighted
+                    ? OutlookTheme.selectedItemBorder
+                    : Colors.transparent,
+              ),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(
-                  widget.item.icon,
-                  size: 16,
-                  color: widget.item.iconColor ?? OutlookTheme.textPrimary,
+                  item.icon,
+                  size: 15,
+                  color: enabled
+                      ? item.iconColor ?? OutlookTheme.textPrimary
+                      : OutlookTheme.textMuted.withValues(alpha: 0.6),
                 ),
                 const SizedBox(width: 4),
-                Text(widget.item.label, style: OutlookTheme.ribbonButtonLabel),
+                Text(
+                  item.menu != null ? '${item.label} ▾' : item.label,
+                  style: OutlookTheme.ribbonButtonLabel.copyWith(
+                    color: enabled ? null : OutlookTheme.textMuted,
+                  ),
+                ),
               ],
             ),
           ),
@@ -307,11 +394,8 @@ class _RibbonGroupSeparator extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Container(
-        width: 1,
-        color: OutlookTheme.dividerColor,
-      ),
+      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+      child: Container(width: 1, color: OutlookTheme.dividerColor),
     );
   }
 }
@@ -332,6 +416,19 @@ class RibbonGroupDefinition {
   const RibbonGroupDefinition({required this.label, required this.items});
 }
 
+/// An entry of a ribbon button's drop-down menu.
+class RibbonMenuItem {
+  final String label;
+  final VoidCallback onTap;
+  final bool isChecked;
+
+  const RibbonMenuItem({
+    required this.label,
+    required this.onTap,
+    this.isChecked = false,
+  });
+}
+
 class RibbonItem {
   final String label;
   final IconData icon;
@@ -340,6 +437,15 @@ class RibbonItem {
   final String? tooltip;
   final VoidCallback? onTap;
 
+  /// Shows the button as pressed (toggle buttons such as Work Offline).
+  final bool isChecked;
+
+  /// When set, the button opens this drop-down menu instead of [onTap].
+  final List<RibbonMenuItem>? menu;
+
+  /// Disables the button even when [onTap] is set.
+  final bool enabled;
+
   const RibbonItem({
     required this.label,
     required this.icon,
@@ -347,5 +453,10 @@ class RibbonItem {
     this.isLarge = false,
     this.tooltip,
     this.onTap,
+    this.isChecked = false,
+    this.menu,
+    this.enabled = true,
   });
+
+  bool get isEnabled => enabled && (onTap != null || menu != null);
 }

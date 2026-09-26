@@ -1,82 +1,66 @@
-import 'dart:convert';
-import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
+
 import '../models/email_account.dart';
-import '../services/database_service.dart';
+import '../services/data_store.dart';
 
-/// Manages email accounts -- loading, saving, adding, removing.
+/// Manages the configured email accounts (persisted in the local database
+/// with encrypted passwords).
 class AccountProvider extends ChangeNotifier {
-  final DataCache _cache = DataCache.instance;
-  bool _isInitialized = false;
-  String? _activeAccountId;
+  final DataStore _store;
 
-  bool get isInitialized => _isInitialized;
-  List<EmailAccount> get accounts => _cache.accounts;
+  AccountProvider({DataStore? store}) : _store = store ?? DataStore.instance;
 
-  EmailAccount? get activeAccount {
-    if (_activeAccountId != null) return _cache.getAccount(_activeAccountId!);
-    return accounts.isNotEmpty ? accounts.first : null;
-  }
+  /// Accounts are loaded synchronously from the database at startup.
+  bool get isInitialized => true;
 
-  AccountProvider() {
-    _loadAccounts();
-  }
+  List<EmailAccount> get accounts => _store.accounts;
 
-  Future<void> _loadAccounts() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getStringList('accounts') ?? [];
-      for (final json in raw) {
-        final map = jsonDecode(json) as Map<String, dynamic>;
-        final account = EmailAccount.fromMap(map);
-        _cache.saveAccount(account);
-      }
-      _activeAccountId = prefs.getString('activeAccountId');
-    } catch (e) {
-      print('Error loading accounts: $e');
-    }
-    _isInitialized = true;
-    notifyListeners();
-  }
+  EmailAccount? get defaultAccount =>
+      accounts.where((a) => a.isDefault).firstOrNull ?? accounts.firstOrNull;
+
+  /// Kept for compatibility with earlier code: the default account.
+  EmailAccount? get activeAccount => defaultAccount;
+
+  EmailAccount? byId(String id) => _store.getAccount(id);
 
   Future<void> addAccount(EmailAccount account) async {
-    _cache.saveAccount(account);
-    if (accounts.length == 1) {
-      _activeAccountId = account.id;
-    }
-    await _persistAccounts();
+    final isFirst = accounts.isEmpty;
+    _store.saveAccount(account.copyWith(isDefault: isFirst || account.isDefault));
+    if (account.isDefault && !isFirst) _makeOnlyDefault(account.id);
     notifyListeners();
   }
 
   Future<void> updateAccount(EmailAccount account) async {
-    _cache.saveAccount(account);
-    await _persistAccounts();
+    _store.saveAccount(account);
+    if (account.isDefault) _makeOnlyDefault(account.id);
     notifyListeners();
   }
 
   Future<void> removeAccount(String id) async {
-    _cache.removeAccount(id);
-    if (_activeAccountId == id) {
-      _activeAccountId = accounts.isNotEmpty ? accounts.first.id : null;
+    final wasDefault = byId(id)?.isDefault ?? false;
+    _store.removeAccount(id);
+    if (wasDefault && accounts.isNotEmpty) {
+      _store.saveAccount(accounts.first.copyWith(isDefault: true));
     }
-    await _persistAccounts();
     notifyListeners();
   }
 
-  void setActiveAccount(String id) {
-    _activeAccountId = id;
+  void setDefaultAccount(String id) {
+    final account = byId(id);
+    if (account == null) return;
+    _store.saveAccount(account.copyWith(isDefault: true));
+    _makeOnlyDefault(id);
     notifyListeners();
+  }
+
+  void _makeOnlyDefault(String id) {
+    for (final a in accounts) {
+      if (a.id != id && a.isDefault) {
+        _store.saveAccount(a.copyWith(isDefault: false));
+      }
+    }
   }
 
   String generateAccountId() => const Uuid().v4();
-
-  Future<void> _persistAccounts() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = accounts.map((a) => jsonEncode(a.toMap())).toList();
-    await prefs.setStringList('accounts', raw);
-    if (_activeAccountId != null) {
-      await prefs.setString('activeAccountId', _activeAccountId!);
-    }
-  }
 }
