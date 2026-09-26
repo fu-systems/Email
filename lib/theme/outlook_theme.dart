@@ -305,7 +305,7 @@ class OutlookTheme {
           contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           isDense: true,
         ),
-        dialogTheme: const DialogTheme(
+        dialogTheme: const DialogThemeData(
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.all(Radius.circular(2)),
           ),

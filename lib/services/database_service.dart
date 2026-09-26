@@ -1,56 +1,8 @@
-import 'dart:async';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
-import 'package:drift/drift.dart';
-import 'package:drift/native.dart';
 import '../models/email_account.dart';
 import '../models/email_message.dart';
 import '../models/folder.dart';
 import '../models/contact.dart';
 import '../models/calendar_event.dart';
-
-/// SQLite database service for local data persistence.
-class DatabaseService {
-  static DatabaseService? _instance;
-  late final NativeDatabase _db;
-  bool _isInitialized = false;
-
-  DatabaseService._();
-
-  static DatabaseService get instance {
-    _instance ??= DatabaseService._();
-    return _instance!;
-  }
-
-  Future<void> initialize() async {
-    if (_isInitialized) return;
-
-    final dir = await getApplicationSupportDirectory();
-    final dbPath = p.join(dir.path, 'look_in.db');
-    _db = NativeDatabase.createInBackground(
-      File(dbPath),
-    );
-
-    await _createTables();
-    _isInitialized = true;
-  }
-
-  Future<void> _createTables() async {
-    await _db.ensureOpen(QueryExecutorUser());
-
-    // We'll use raw SQL for simplicity since we're not using drift's
-    // code generation for this initial version.
-    // In production, you'd use drift's table definitions and code gen.
-  }
-
-  // For the initial version, we'll use a simpler approach with
-  // shared_preferences for accounts and in-memory caching for messages.
-  // Full SQLite persistence will be added in a future version.
-
-  Future<void> close() async {
-    await _db.close();
-  }
-}
 
 /// Simple in-memory cache for email data.
 /// This serves as the data layer until full SQLite persistence is implemented.
@@ -174,5 +126,3 @@ class DataCache {
   }
 }
 
-// Minimal File class for drift's NativeDatabase path (re-exported from dart:io)
-export 'dart:io' show File;

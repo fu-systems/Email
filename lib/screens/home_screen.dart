@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../theme/outlook_theme.dart';
+import '../models/email_message.dart';
 import '../models/folder.dart';
 import '../providers/navigation_provider.dart';
 import '../providers/mail_provider.dart';

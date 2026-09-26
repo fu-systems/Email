@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../models/email_message.dart';
 import '../../providers/mail_provider.dart';
 import '../../widgets/folder_pane.dart';
 import '../../widgets/message_list.dart';

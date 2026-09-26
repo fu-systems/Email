@@ -1,14 +1,14 @@
 name: look_in
 description: >
   Look In - An open-source Linux email client inspired by Microsoft Outlook 2013.
-  Features email (IMAP/SMTP), calendar, and contacts management with a classic
-  ribbon-style interface.
+  Features email (IMAP/SMTP/POP3), calendar, and contacts management with a
+  classic ribbon-style interface.
 publish_to: 'none'
-version: 0.1.0+1
+version: 0.2.0+2
 
 environment:
-  sdk: '>=3.1.0 <4.0.0'
-  flutter: '>=3.13.0'
+  sdk: '>=3.5.0 <4.0.0'
+  flutter: '>=3.24.0'
 
 dependencies:
   flutter:
@@ -20,9 +20,8 @@ dependencies:
   # Email
   enough_mail: ^2.1.6
 
-  # Database
-  drift: ^2.14.1
-  sqlite3_flutter_libs: ^0.5.18
+  # Database (SQLite is bundled by the sqlite3 build hook)
+  sqlite3: ^3.5.0
   path_provider: ^2.1.1
   path: ^1.8.3
 
@@ -30,11 +29,11 @@ dependencies:
   table_calendar: ^3.0.9
 
   # UI utilities
-  flutter_html: ^3.0.0-beta.2
+  flutter_html: ^3.0.0
   intl: ^0.19.0
   uuid: ^4.2.1
   shared_preferences: ^2.2.2
-  file_picker: ^6.1.1
+  file_picker: ^13.1.0
   collection: ^1.18.0
   url_launcher: ^6.2.2
 
@@ -44,12 +43,7 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^3.0.1
-  drift_dev: ^2.14.1
-  build_runner: ^2.4.7
+  flutter_lints: ^6.0.0
 
 flutter:
   uses-material-design: true
-
-  assets:
-    - assets/icons/

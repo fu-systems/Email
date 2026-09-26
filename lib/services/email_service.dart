@@ -218,11 +218,7 @@ class EmailService {
 
   bool _hasAttachments(enough.MimeMessage msg) {
     try {
-      final info = msg.findContentInfo();
-      return info.any((ci) =>
-          ci.disposition == enough.ContentDisposition.attachment ||
-          (ci.disposition == enough.ContentDisposition.inline &&
-              ci.mediaType?.top != enough.MediaToptype.text));
+      return msg.hasAttachmentsOrInlineNonTextualParts();
     } catch (_) {
       return false;
     }
