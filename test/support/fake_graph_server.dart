@@ -217,6 +217,473 @@ class FakeGraphServer {
     _changed(m.folderId, id);
   }
 
+  // ─── Calendar ──────────────────────────────────────────────────────
+
+  /// Events by id, in Graph's JSON (times in UTC). Series masters are kept
+  /// here too; the calendar view shows their occurrences instead.
+  final events = <String, Map<String, dynamic>>{};
+
+  /// Calendar requests answer 403 (e.g. no Calendars.ReadWrite).
+  bool denyCalendar = false;
+
+  /// The bodies of PATCH requests to events and contacts, by item id.
+  final patches = <String, List<Map<String, dynamic>>>{};
+
+  /// Invitation answers: event id → accept/tentativelyAccept/decline.
+  final invitationAnswers = <String, String>{};
+
+  final _eventChanges = <({int seq, String id})>[];
+
+  static String _utcWall(DateTime t) =>
+      '${t.toUtc().toIso8601String().replaceAll('Z', '').split('.').first}.0000000';
+
+  /// Adds an event; [start] and [end] are UTC (or dates for all-day).
+  String addEvent({
+    required String subject,
+    required DateTime start,
+    required DateTime end,
+    bool isAllDay = false,
+    String? iCalUId,
+    Map<String, dynamic> extra = const {},
+  }) {
+    final id = _newId('evt');
+    events[id] = {
+      'id': id,
+      'subject': subject,
+      'type': 'singleInstance',
+      'start': {'dateTime': _utcWall(start), 'timeZone': 'UTC'},
+      'end': {'dateTime': _utcWall(end), 'timeZone': 'UTC'},
+      'isAllDay': isAllDay,
+      'iCalUId': iCalUId ?? '$id@fake',
+      ...extra,
+    };
+    _touchEvent(id);
+    return id;
+  }
+
+  /// A weekly series (in UTC) with [count] occurrences.
+  String addSeries({
+    required String subject,
+    required DateTime start,
+    required Duration length,
+    int count = 10,
+  }) {
+    final id = _newId('evt');
+    events[id] = {
+      'id': id,
+      'subject': subject,
+      'type': 'seriesMaster',
+      'start': {'dateTime': _utcWall(start), 'timeZone': 'UTC'},
+      'end': {'dateTime': _utcWall(start.add(length)), 'timeZone': 'UTC'},
+      'isAllDay': false,
+      'iCalUId': '$id@fake',
+      'recurrence': {
+        'pattern': {'type': 'weekly', 'interval': 1},
+        'range': {'type': 'numbered', 'numberOfOccurrences': count},
+      },
+    };
+    _touchEvent(id);
+    _expandSeries(id);
+    return id;
+  }
+
+  void _touchEvent(String id, {DateTime? at}) {
+    final e = events[id];
+    if (e != null) {
+      final version =
+          int.parse(
+            (e['@odata.etag'] as String? ?? 'W/"0"').replaceAll(
+              RegExp(r'[^0-9]'),
+              '',
+            ),
+          ) +
+          1;
+      e['@odata.etag'] = 'W/"$version"';
+      e['lastModifiedDateTime'] = (at ?? DateTime.now())
+          .toUtc()
+          .toIso8601String();
+      e['createdDateTime'] ??= e['lastModifiedDateTime'];
+    }
+    _eventChanges.add((seq: ++_seq, id: id));
+  }
+
+  /// Changes an event as if in Outlook (new version).
+  void changeEvent(String id, Map<String, dynamic> changes, {DateTime? at}) {
+    events[id]!.addAll(changes);
+    _touchEvent(id, at: at);
+  }
+
+  void removeEvent(String id) {
+    final removed = events.remove(id);
+    if (removed?['type'] == 'seriesMaster') {
+      for (final o
+          in events.values
+              .where((e) => e['seriesMasterId'] == id)
+              .map((e) => e['id'] as String)
+              .toList()) {
+        events.remove(o);
+        _touchEvent(o);
+      }
+    }
+    _touchEvent(id);
+  }
+
+  /// Occurrences for a series master, from simple patterns.
+  void _expandSeries(String masterId) {
+    final master = events[masterId]!;
+    final recurrence = (master['recurrence'] as Map).cast<String, dynamic>();
+    final pattern = (recurrence['pattern'] as Map).cast<String, dynamic>();
+    final range = (recurrence['range'] as Map).cast<String, dynamic>();
+    final zone = (master['start'] as Map)['timeZone'] as String;
+    DateTime parse(Map t) {
+      final wall = DateTime.parse(t['dateTime'] as String);
+      // The fake treats non-UTC zones as the machine's local time.
+      return zone == 'UTC'
+          ? DateTime.utc(
+              wall.year,
+              wall.month,
+              wall.day,
+              wall.hour,
+              wall.minute,
+            )
+          : wall;
+    }
+
+    final start = parse(master['start'] as Map);
+    final length = parse(master['end'] as Map).difference(start);
+    final interval = pattern['interval'] as int? ?? 1;
+    final count = range['type'] == 'numbered'
+        ? range['numberOfOccurrences'] as int
+        : 10;
+    final until = range['type'] == 'endDate'
+        ? DateTime.parse(range['endDate'] as String)
+        : null;
+    for (var i = 0; i < count; i++) {
+      final at = switch (pattern['type']) {
+        'daily' => start.add(Duration(days: i * interval)),
+        'weekly' => start.add(Duration(days: 7 * i * interval)),
+        'absoluteMonthly' => DateTime(
+          start.year,
+          start.month + i * interval,
+          start.day,
+          start.hour,
+          start.minute,
+        ),
+        _ => DateTime(
+          start.year + i * interval,
+          start.month,
+          start.day,
+          start.hour,
+          start.minute,
+        ),
+      };
+      if (until != null && at.isAfter(until.add(const Duration(days: 1)))) {
+        break;
+      }
+      final id = '$masterId-occ$i';
+      events[id] = {
+        ...master,
+        'id': id,
+        'type': 'occurrence',
+        'seriesMasterId': masterId,
+        'start': {'dateTime': _utcWall(at), 'timeZone': 'UTC'},
+        'end': {'dateTime': _utcWall(at.add(length)), 'timeZone': 'UTC'},
+      }..remove('recurrence');
+      _touchEvent(id);
+    }
+  }
+
+  List<Map<String, dynamic>> get occurrences => [
+    for (final e in events.values)
+      if (e['type'] != 'seriesMaster') e,
+  ];
+
+  _Reply _calendar(
+    String method,
+    List<String> path,
+    Map<String, String> q,
+    Map<String, String> headers,
+    Map<String, dynamic> Function() json,
+  ) {
+    if (denyCalendar) {
+      return _Reply.error(403, 'ErrorAccessDenied', 'Access is denied.');
+    }
+    if (path[0] == 'calendarView') {
+      return _viewDelta(q, headers);
+    }
+    if (path.length == 1) {
+      if (method == 'POST') {
+        final data = json();
+        final id = _newId('evt');
+        final isSeries = data['recurrence'] != null;
+        events[id] = {
+          ...data,
+          'id': id,
+          'type': isSeries ? 'seriesMaster' : 'singleInstance',
+          'iCalUId': '$id@fake',
+        };
+        // Stored in UTC like the view reads them (the zone is kept for
+        // series expansion).
+        if (!isSeries) _toUtc(events[id]!);
+        _touchEvent(id);
+        if (isSeries) _expandSeries(id);
+        return _Reply(201, json: events[id]);
+      }
+      // $filter=iCalUId eq '...'
+      final uid = RegExp(r"iCalUId eq '(.*)'").firstMatch(q[r'$filter'] ?? '');
+      return _Reply(
+        200,
+        json: {
+          'value': [
+            for (final e in events.values)
+              if (uid == null || e['iCalUId'] == uid[1]) {'id': e['id']},
+          ],
+        },
+      );
+    }
+    final e = events[path[1]];
+    if (e == null) return _Reply.error(404, 'ErrorItemNotFound', 'No event');
+    if (path.length == 3) {
+      final action = path[2];
+      if (action == 'instances') {
+        return _Reply(
+          200,
+          json: {
+            'value': [
+              for (final o in events.values)
+                if (o['seriesMasterId'] == e['id']) o,
+            ],
+          },
+        );
+      }
+      if (method == 'POST') {
+        invitationAnswers[e['id'] as String] = action;
+        if (action == 'decline') {
+          removeEvent(e['id'] as String);
+        } else {
+          changeEvent(e['id'] as String, {
+            'responseStatus': {'response': action},
+          });
+        }
+        return const _Reply(202);
+      }
+    }
+    final match = headers['if-match'];
+    switch (method) {
+      case 'GET':
+        return _Reply(200, json: e);
+      case 'PATCH':
+        if (match != null && match != e['@odata.etag']) {
+          return _Reply.error(412, 'ErrorIrresolvableConflict', 'Changed');
+        }
+        patches.putIfAbsent(e['id'] as String, () => []).add(json());
+        e.addAll(json());
+        _toUtc(e);
+        _touchEvent(e['id'] as String);
+        return _Reply(200, json: e);
+      case 'DELETE':
+        removeEvent(e['id'] as String);
+        return const _Reply(204);
+    }
+    return _Reply.error(400, 'BadRequest', path.join('/'));
+  }
+
+  /// Stores times the client sent in a named zone as UTC, as Graph returns
+  /// them with `Prefer: outlook.timezone="UTC"`.
+  static void _toUtc(Map<String, dynamic> e) {
+    if (e['isAllDay'] == true) return;
+    for (final key in ['start', 'end']) {
+      final t = (e[key] as Map).cast<String, dynamic>();
+      if (t['timeZone'] == 'UTC') continue;
+      final wall = DateTime.parse(t['dateTime'] as String);
+      e[key] = {'dateTime': _utcWall(wall), 'timeZone': 'UTC'};
+    }
+  }
+
+  _Reply _viewDelta(Map<String, String> q, Map<String, String> headers) {
+    final base = '$baseUrl/me/calendarView/delta';
+    final skip = q[r'$skiptoken'];
+    if (skip != null) {
+      final stored = _pages.remove(skip);
+      if (stored == null) return _Reply.error(410, 'SyncStateNotFound', 'Gone');
+      return _page(base, stored.items, stored.last, headers);
+    }
+    final last = '$base?\$deltatoken=$_seq';
+    if (q[r'$deltatoken'] != null) {
+      if (expireDeltaLinks) {
+        return _Reply.error(410, 'SyncStateNotFound', 'The delta link expired');
+      }
+      final since = int.parse(q[r'$deltatoken']!);
+      final ids = {
+        for (final c in _eventChanges)
+          if (c.seq > since) c.id,
+      };
+      return _page(
+        base,
+        [
+          for (final id in ids)
+            if (events[id] case final e?)
+              if (e['type'] != 'seriesMaster') e else null
+            else
+              {
+                'id': id,
+                '@removed': {'reason': 'deleted'},
+              },
+        ].whereType<Map<String, dynamic>>().toList(),
+        last,
+        headers,
+      );
+    }
+    if (q['startDateTime'] == null || q['endDateTime'] == null) {
+      return _Reply.error(400, 'ErrorInvalidParameter', 'Window missing');
+    }
+    return _page(base, occurrences, last, headers);
+  }
+
+  _Reply _page(
+    String base,
+    List<Map<String, dynamic>> items,
+    String last,
+    Map<String, String> headers,
+  ) {
+    final size =
+        int.tryParse(
+          RegExp(
+                r'odata\.maxpagesize=(\d+)',
+              ).firstMatch(headers['prefer'] ?? '')?.group(1) ??
+              '',
+        ) ??
+        50;
+    if (items.length > size) {
+      final key = 'page${++_nextId}';
+      _pages[key] = (items: items.sublist(size), last: last);
+      return _Reply(
+        200,
+        json: {
+          'value': items.sublist(0, size),
+          '@odata.nextLink': '$base?\$skiptoken=$key',
+        },
+      );
+    }
+    return _Reply(200, json: {'value': items, '@odata.deltaLink': last});
+  }
+
+  // ─── Contacts ──────────────────────────────────────────────────────
+
+  final contacts = <String, Map<String, dynamic>>{};
+  static const contactFolderId = 'cf-contacts';
+  final _contactChanges = <({int seq, String id})>[];
+
+  void _touchContact(String id, {DateTime? at}) {
+    final c = contacts[id];
+    if (c != null) {
+      final version =
+          int.parse(
+            (c['@odata.etag'] as String? ?? 'W/"0"').replaceAll(
+              RegExp(r'[^0-9]'),
+              '',
+            ),
+          ) +
+          1;
+      c['@odata.etag'] = 'W/"$version"';
+      c['lastModifiedDateTime'] = (at ?? DateTime.now())
+          .toUtc()
+          .toIso8601String();
+      c['createdDateTime'] ??= c['lastModifiedDateTime'];
+      c['parentFolderId'] = contactFolderId;
+    }
+    _contactChanges.add((seq: ++_seq, id: id));
+  }
+
+  String addContact(Map<String, dynamic> fields) {
+    final id = _newId('con');
+    contacts[id] = {...fields, 'id': id};
+    _touchContact(id);
+    return id;
+  }
+
+  void changeContact(String id, Map<String, dynamic> changes, {DateTime? at}) {
+    contacts[id]!.addAll(changes);
+    _touchContact(id, at: at);
+  }
+
+  void removeContact(String id) {
+    contacts.remove(id);
+    _touchContact(id);
+  }
+
+  _Reply _contactsApi(
+    String method,
+    List<String> path,
+    Map<String, String> q,
+    Map<String, String> headers,
+    Map<String, dynamic> Function() json,
+  ) {
+    if (path[0] == 'contactFolders') {
+      if (path.length == 1) return const _Reply(200, json: {'value': []});
+      if (path[1] != contactFolderId) {
+        return _Reply.error(404, 'ErrorItemNotFound', 'No folder');
+      }
+      final base = '$baseUrl/me/contactFolders/$contactFolderId/contacts/delta';
+      final skip = q[r'$skiptoken'];
+      if (skip != null) {
+        final stored = _pages.remove(skip);
+        if (stored == null) {
+          return _Reply.error(410, 'SyncStateNotFound', 'Gone');
+        }
+        return _page(base, stored.items, stored.last, headers);
+      }
+      final last = '$base?\$deltatoken=$_seq';
+      if (q[r'$deltatoken'] != null) {
+        final since = int.parse(q[r'$deltatoken']!);
+        final ids = {
+          for (final c in _contactChanges)
+            if (c.seq > since) c.id,
+        };
+        return _page(
+          base,
+          [
+            for (final id in ids)
+              contacts[id] ??
+                  {
+                    'id': id,
+                    '@removed': {'reason': 'deleted'},
+                  },
+          ],
+          last,
+          headers,
+        );
+      }
+      return _page(base, contacts.values.toList(), last, headers);
+    }
+    if (path.length == 1) {
+      if (method == 'POST') {
+        final id = addContact(json());
+        return _Reply(201, json: contacts[id]);
+      }
+      final top = int.tryParse(q[r'$top'] ?? '') ?? 10;
+      return _Reply(200, json: {'value': contacts.values.take(top).toList()});
+    }
+    final c = contacts[path[1]];
+    if (c == null) return _Reply.error(404, 'ErrorItemNotFound', 'No contact');
+    final match = headers['if-match'];
+    switch (method) {
+      case 'GET':
+        return _Reply(200, json: c);
+      case 'PATCH':
+        if (match != null && match != c['@odata.etag']) {
+          return _Reply.error(412, 'ErrorIrresolvableConflict', 'Changed');
+        }
+        patches.putIfAbsent(c['id'] as String, () => []).add(json());
+        changeContact(c['id'] as String, json());
+        return _Reply(200, json: c);
+      case 'DELETE':
+        removeContact(c['id'] as String);
+        return const _Reply(204);
+    }
+    return _Reply.error(400, 'BadRequest', path.join('/'));
+  }
+
   List<FakeGraphMessage> messagesIn(String folderName) {
     final f = folder(folderName)!;
     return messages.values.where((m) => m.folderId == f.id).toList();
@@ -375,6 +842,14 @@ class FakeGraphServer {
 
     if (path[0] == 'mailFolders') {
       return _folders(method, path.sublist(1), q, headers, body, json);
+    }
+
+    if (path[0] == 'calendarView' || path[0] == 'events') {
+      return _calendar(method, path, q, headers, json);
+    }
+
+    if (path[0] == 'contacts' || path[0] == 'contactFolders') {
+      return _contactsApi(method, path, q, headers, json);
     }
 
     if (path[0] == 'messages') {

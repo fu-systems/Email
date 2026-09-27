@@ -10,6 +10,18 @@ class Contact {
   final ContactAddress? address;
   final String? notes;
   final String? photoPath;
+
+  /// The address book it belongs to: null for the local one, otherwise a
+  /// synced one (`graph:<accountId>` for a Microsoft account).
+  final String? sourceId;
+
+  /// Server id and version (Microsoft Graph).
+  final String? remoteId;
+  final String? etag;
+
+  /// A change not sent to the server yet: `create` or `update`.
+  final String? pendingSync;
+
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -24,9 +36,16 @@ class Contact {
     this.address,
     this.notes,
     this.photoPath,
+    this.sourceId,
+    this.remoteId,
+    this.etag,
+    this.pendingSync,
     required this.createdAt,
     required this.updatedAt,
   });
+
+  /// Whether this contact is kept in sync with a server.
+  bool get isSynced => sourceId != null;
 
   String get displayName {
     final first = firstName?.trim() ?? '';
@@ -73,6 +92,11 @@ class Contact {
     ContactAddress? address,
     String? notes,
     String? photoPath,
+    String? sourceId,
+    String? remoteId,
+    String? etag,
+    String? pendingSync,
+    bool clearPendingSync = false,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) {
@@ -87,6 +111,11 @@ class Contact {
       address: address ?? this.address,
       notes: notes ?? this.notes,
       photoPath: photoPath ?? this.photoPath,
+      sourceId: sourceId ?? this.sourceId,
+      remoteId: remoteId ?? this.remoteId,
+      etag: etag ?? this.etag,
+      pendingSync:
+          clearPendingSync ? null : (pendingSync ?? this.pendingSync),
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
@@ -116,6 +145,10 @@ class Contact {
       address: address,
       notes: notes,
       photoPath: photoPath,
+      sourceId: sourceId,
+      remoteId: remoteId,
+      etag: etag,
+      pendingSync: pendingSync,
       createdAt: createdAt,
       updatedAt: updatedAt,
     );
@@ -132,6 +165,10 @@ class Contact {
         'address': address?.toMap(),
         'notes': notes,
         'photoPath': photoPath,
+        'sourceId': ?sourceId,
+        'remoteId': ?remoteId,
+        'etag': ?etag,
+        'pendingSync': ?pendingSync,
         'createdAt': createdAt.toIso8601String(),
         'updatedAt': updatedAt.toIso8601String(),
       };
@@ -154,6 +191,10 @@ class Contact {
                 (map['address'] as Map).cast<String, dynamic>()),
         notes: map['notes'] as String?,
         photoPath: map['photoPath'] as String?,
+        sourceId: map['sourceId'] as String?,
+        remoteId: map['remoteId'] as String?,
+        etag: map['etag'] as String?,
+        pendingSync: map['pendingSync'] as String?,
         createdAt: DateTime.parse(map['createdAt'] as String),
         updatedAt: DateTime.parse(map['updatedAt'] as String),
       );

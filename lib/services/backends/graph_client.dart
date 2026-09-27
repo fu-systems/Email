@@ -17,6 +17,13 @@ class GraphException implements Exception {
 
   bool get isNotFound => status == 404 || code == 'ErrorItemNotFound';
 
+  /// The app registration lacks a permission, or it wasn't granted.
+  bool get isAccessDenied => const {
+    'ErrorAccessDenied',
+    'AccessDenied',
+    'Authorization_RequestDenied',
+  }.contains(code);
+
   /// The delta link can't be used any more; sync starts over.
   bool get isSyncStateGone =>
       status == 410 ||
@@ -29,7 +36,7 @@ class GraphException implements Exception {
 
   @override
   String toString() => switch (code) {
-    'ErrorAccessDenied' || 'AccessDenied' || 'Authorization_RequestDenied' =>
+    _ when isAccessDenied =>
       'Microsoft denied access to the mailbox. The app registration needs '
           'the Mail.ReadWrite and Mail.Send permissions, and your '
           'organization may need to grant admin consent. ($message)',
@@ -147,6 +154,7 @@ class GraphClient {
     String? contentType,
     Map<String, String> headers = const {},
     int? pageSize,
+    List<String> prefer = const [],
   }) async {
     final uri = buildUri(pathOrUrl, query);
     // Links from answers (next pages, delta links) must lead back to Graph
@@ -168,6 +176,7 @@ class GraphClient {
         contentType: contentType,
         headers: headers,
         pageSize: pageSize,
+        prefer: prefer,
         forceRefresh: forceRefresh,
       );
       if (response.ok) return response;
@@ -227,6 +236,7 @@ class GraphClient {
     String? contentType,
     required Map<String, String> headers,
     int? pageSize,
+    List<String> prefer = const [],
     required bool forceRefresh,
   }) async {
     final accessToken = await token(forceRefresh: forceRefresh);
@@ -243,6 +253,7 @@ class GraphClient {
         [
           'IdType="ImmutableId"',
           if (pageSize != null) 'odata.maxpagesize=$pageSize',
+          ...prefer,
         ].join(', '),
       );
       headers.forEach(request.headers.set);
@@ -352,19 +363,26 @@ class GraphClient {
     String pathOrUrl, {
     Map<String, String>? query,
     int? pageSize,
-  }) async =>
-      (await request('GET', pathOrUrl, query: query, pageSize: pageSize)).json;
+    List<String> prefer = const [],
+  }) async => (await request(
+    'GET',
+    pathOrUrl,
+    query: query,
+    pageSize: pageSize,
+    prefer: prefer,
+  )).json;
 
   /// All items of a collection, following `@odata.nextLink`.
   Future<List<Map<String, dynamic>>> getAll(
     String pathOrUrl, {
     Map<String, String>? query,
     int pageSize = 100,
+    List<String> prefer = const [],
   }) async {
     final items = <Map<String, dynamic>>[];
     String? next = buildUri(pathOrUrl, query).toString();
     while (next != null) {
-      final page = await getJson(next, pageSize: pageSize);
+      final page = await getJson(next, pageSize: pageSize, prefer: prefer);
       items.addAll((page['value'] as List? ?? const []).cast());
       next = page['@odata.nextLink'] as String?;
     }

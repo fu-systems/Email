@@ -64,6 +64,50 @@ Future<void> main(List<String> args) async {
     received: ago(1440),
     isRead: true,
   );
+  final today = DateTime.now();
+  DateTime local(int days, int hour, [int minute = 0]) =>
+      DateTime(today.year, today.month, today.day + days, hour, minute).toUtc();
+  graph.addEvent(
+    subject: 'Design review',
+    start: local(1, 10),
+    end: local(1, 11),
+    extra: {
+      'location': {'displayName': 'Room 4'},
+      'categories': ['Green category'],
+      'isReminderOn': true,
+      'reminderMinutesBeforeStart': 15,
+    },
+  );
+  graph.addEvent(
+    subject: 'Company offsite',
+    start: DateTime.utc(today.year, today.month, today.day + 3),
+    end: DateTime.utc(today.year, today.month, today.day + 5),
+    isAllDay: true,
+  );
+  graph.addSeries(
+    subject: 'Team standup',
+    start: local(-7, 9, 30),
+    length: const Duration(minutes: 15),
+    count: 12,
+  );
+  graph.addContact({
+    'givenName': 'Bob',
+    'surname': 'Example',
+    'companyName': 'Contoso',
+    'jobTitle': 'Finance lead',
+    'emailAddresses': [
+      {'address': 'bob@example.com'},
+    ],
+    'mobilePhone': '+1 555 0101',
+  });
+  graph.addContact({
+    'givenName': 'Carol',
+    'surname': 'Example',
+    'emailAddresses': [
+      {'address': 'carol@example.com'},
+    ],
+    'businessPhones': ['+1 555 0102'],
+  });
   stdout.writeln(graph.baseUrl);
 
   // Type a subject to deliver a new message to the inbox.

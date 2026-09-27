@@ -32,6 +32,22 @@ class CalendarEvent {
   /// iCalendar UID; defaults to [id] for locally created events.
   final String? icalUid;
 
+  /// The calendar it belongs to: null for the local calendar, otherwise
+  /// a synced one (`graph:<accountId>` for a Microsoft account).
+  final String? sourceId;
+
+  /// Server id (Graph event id; for a recurring series, the occurrence).
+  final String? remoteId;
+
+  /// Graph id of the series an occurrence belongs to.
+  final String? seriesMasterId;
+
+  /// Server version, to detect changes made elsewhere meanwhile.
+  final String? etag;
+
+  /// A change not sent to the server yet: `create` or `update`.
+  final String? pendingSync;
+
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -52,9 +68,17 @@ class CalendarEvent {
     this.attendees = const [],
     this.organizer,
     this.icalUid,
+    this.sourceId,
+    this.remoteId,
+    this.seriesMasterId,
+    this.etag,
+    this.pendingSync,
     required this.createdAt,
     required this.updatedAt,
   });
+
+  /// Whether this event is kept in sync with a server.
+  bool get isSynced => sourceId != null;
 
   Duration get duration => endTime.difference(startTime);
 
@@ -274,6 +298,12 @@ class CalendarEvent {
     List<String>? attendees,
     String? organizer,
     String? icalUid,
+    String? sourceId,
+    String? remoteId,
+    String? seriesMasterId,
+    String? etag,
+    String? pendingSync,
+    bool clearPendingSync = false,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) {
@@ -298,6 +328,12 @@ class CalendarEvent {
       attendees: attendees ?? this.attendees,
       organizer: organizer ?? this.organizer,
       icalUid: icalUid ?? this.icalUid,
+      sourceId: sourceId ?? this.sourceId,
+      remoteId: remoteId ?? this.remoteId,
+      seriesMasterId: seriesMasterId ?? this.seriesMasterId,
+      etag: etag ?? this.etag,
+      pendingSync:
+          clearPendingSync ? null : (pendingSync ?? this.pendingSync),
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
@@ -320,6 +356,11 @@ class CalendarEvent {
         'attendees': attendees,
         'organizer': organizer,
         'icalUid': icalUid,
+        'sourceId': ?sourceId,
+        'remoteId': ?remoteId,
+        'seriesMasterId': ?seriesMasterId,
+        'etag': ?etag,
+        'pendingSync': ?pendingSync,
         'createdAt': createdAt.toIso8601String(),
         'updatedAt': updatedAt.toIso8601String(),
       };
@@ -347,6 +388,11 @@ class CalendarEvent {
         attendees: _parseAttendees(map['attendees']),
         organizer: map['organizer'] as String?,
         icalUid: map['icalUid'] as String?,
+        sourceId: map['sourceId'] as String?,
+        remoteId: map['remoteId'] as String?,
+        seriesMasterId: map['seriesMasterId'] as String?,
+        etag: map['etag'] as String?,
+        pendingSync: map['pendingSync'] as String?,
         createdAt: DateTime.parse(map['createdAt'] as String),
         updatedAt: DateTime.parse(map['updatedAt'] as String),
       );

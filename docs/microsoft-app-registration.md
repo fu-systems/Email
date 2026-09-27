@@ -4,7 +4,7 @@ Microsoft no longer accepts passwords from mail apps: Outlook.com stopped on 16 
 
 Look In connects in one of two ways, chosen under **Connect with** when you add the account (or later in **Account Settings**):
 
-- **Microsoft Graph** (recommended): mail syncs over HTTPS with Microsoft's REST API, and sending works even where the organization turned off SMTP sign-in. Calendar and contacts will sync this way too.
+- **Microsoft Graph** (recommended): mail syncs over HTTPS with Microsoft's REST API, and sending works even where the organization turned off SMTP sign-in. Your calendar and contacts sync this way too.
 - **IMAP and SMTP**: the classic mail protocols, with the sign-in token instead of a password.
 
 Every OAuth app needs an **app registration** in Microsoft Entra ID. Look In does not ship one; you or your organization create it once, for free. After that, every Microsoft account in Look In uses it.
@@ -39,7 +39,8 @@ In the registration, open **API permissions > Add a permission > Microsoft Graph
 | `Mail.ReadWrite` | Microsoft Graph | Read and organize mail, save drafts |
 | `Mail.Send` | Microsoft Graph | Send mail |
 | `User.Read` | Microsoft Graph | Show who is signed in |
-| `Calendars.ReadWrite`, `Contacts.ReadWrite` | Microsoft Graph | Calendar and contacts sync (asked for now, so nobody needs to approve Look In again when it arrives) |
+| `Calendars.ReadWrite` | Microsoft Graph | Calendar sync, and answering meeting invitations |
+| `Contacts.ReadWrite` | Microsoft Graph | Contacts sync |
 | `IMAP.AccessAsUser.All` | IMAP and SMTP | Read and organize mail over IMAP |
 | `SMTP.Send` | IMAP and SMTP | Send mail over SMTP |
 | `offline_access` | both | Stay signed in (refresh tokens) |
@@ -110,6 +111,7 @@ Microsoft Graph needs nothing more. With **IMAP and SMTP**, the sign-in only get
 | AADSTS50011, "redirect URI does not match" | Add `http://localhost` as a **Mobile and desktop applications** redirect URI. |
 | AADSTS7000218, "client_assertion or client_secret" | The redirect URI was added under **Web**. Move it to **Mobile and desktop applications**. |
 | "Microsoft denied access to the mailbox" (Graph) | The registration lacks `Mail.ReadWrite` or `Mail.Send`, or they need admin consent. |
+| The calendar in Calendar's sidebar says "Not synced", or the address book in People shows a warning sign, with "Microsoft denied access" | The registration lacks `Calendars.ReadWrite` or `Contacts.ReadWrite`, or they need admin consent. Mail keeps working meanwhile. |
 | "This mailbox can't be reached through Microsoft Graph" | The mailbox is on an on-premises Exchange server. Use **IMAP and SMTP**, or a password. |
 | "Sign in with Microsoft again so Look In may use …" | You switched between Microsoft Graph and IMAP and SMTP; the existing sign-in only allows the other one. |
 | "User is authenticated but not connected" | IMAP is turned off for the mailbox (see [Mailbox settings](#mailbox-settings)). |
@@ -132,5 +134,6 @@ Accounts added with IMAP and SMTP keep working. To move one to Microsoft Graph, 
 1. Add the account: **Sign in with Microsoft** shows "Signed in with Microsoft as …".
 2. The **Test** step passes (Microsoft Graph, or IMAP and SMTP).
 3. Mail arrives, and a message you send appears in Sent Items.
-4. Restart Look In: the account connects without signing in again.
-5. After an hour (when the access token expires), sending and receiving still work.
+4. With Microsoft Graph, your Outlook calendar appears under **My Calendars** and your contacts under **People**; an appointment made in Look In shows up in Outlook on the web.
+5. Restart Look In: the account connects without signing in again.
+6. After an hour (when the access token expires), sending and receiving still work.

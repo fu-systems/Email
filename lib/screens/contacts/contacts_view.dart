@@ -105,22 +105,64 @@ class _PeopleNavigationPane extends StatelessWidget {
                   padding: EdgeInsets.fromLTRB(6, 0, 12, 6),
                   child: Row(
                     children: [
-                      Icon(Icons.arrow_drop_down,
-                          size: 18, color: OutlookTheme.textSecondary),
+                      Icon(
+                        Icons.arrow_drop_down,
+                        size: 18,
+                        color: OutlookTheme.textSecondary,
+                      ),
                       SizedBox(width: 2),
-                      Text('My Contacts',
-                          style: OutlookTheme.folderLabelBoldStyle),
+                      Text(
+                        'My Contacts',
+                        style: OutlookTheme.folderLabelBoldStyle,
+                      ),
                     ],
                   ),
                 ),
-                _NavigationEntry(
-                  icon: Icons.contacts_outlined,
-                  label: 'Contacts (${provider.contactsById.length})',
-                  selected: !provider.showGroups,
-                  onTap: () {
-                    if (provider.showGroups) provider.setShowGroups(false);
-                  },
-                ),
+                // One entry per address book when there are Microsoft
+                // ones; otherwise "Contacts" shows them all.
+                if (provider.addressBooks.length < 2)
+                  _NavigationEntry(
+                    icon: Icons.contacts_outlined,
+                    label: 'Contacts (${provider.contactsById.length})',
+                    selected: !provider.showGroups,
+                    onTap: () {
+                      if (provider.showGroups) provider.setShowGroups(false);
+                      provider.setAddressBookFilter(null);
+                    },
+                  )
+                else ...[
+                  _NavigationEntry(
+                    icon: Icons.people_outline,
+                    label: 'All Contacts (${provider.contactsById.length})',
+                    selected:
+                        !provider.showGroups &&
+                        provider.addressBookFilter == null,
+                    onTap: () {
+                      if (provider.showGroups) provider.setShowGroups(false);
+                      provider.setAddressBookFilter(null);
+                    },
+                  ),
+                  for (final book in provider.addressBooks)
+                    _NavigationEntry(
+                      icon: book.id == null
+                          ? Icons.contacts_outlined
+                          : Icons.cloud,
+                      // Microsoft address books by their account.
+                      label:
+                          '${book.id == null ? 'Contacts' : provider.addressBookLabel(book.id).replaceFirst('Contacts - ', '')}'
+                          ' (${provider.countIn(book.id)})',
+                      problem: book.id == null
+                          ? null
+                          : provider.addressBookError(book.id!),
+                      selected:
+                          !provider.showGroups &&
+                          provider.addressBookFilter == (book.id ?? 'local'),
+                      onTap: () {
+                        if (provider.showGroups) provider.setShowGroups(false);
+                        provider.setAddressBookFilter(book.id ?? 'local');
+                      },
+                    ),
+                ],
                 _NavigationEntry(
                   icon: Icons.groups_outlined,
                   label: 'Contact Groups (${provider.groups.length})',
@@ -173,11 +215,15 @@ class _NavigationEntry extends StatefulWidget {
   final bool selected;
   final VoidCallback onTap;
 
+  /// A sync problem, shown as a warning icon with the details on hover.
+  final String? problem;
+
   const _NavigationEntry({
     required this.icon,
     required this.label,
     required this.selected,
     required this.onTap,
+    this.problem,
   });
 
   @override
@@ -203,8 +249,8 @@ class _NavigationEntryState extends State<_NavigationEntry> {
             color: widget.selected
                 ? OutlookTheme.selectedItemBackground
                 : _hovered
-                    ? OutlookTheme.hoverColor
-                    : Colors.transparent,
+                ? OutlookTheme.hoverColor
+                : Colors.transparent,
             border: Border(
               left: BorderSide(
                 color: widget.selected
@@ -216,11 +262,13 @@ class _NavigationEntryState extends State<_NavigationEntry> {
           ),
           child: Row(
             children: [
-              Icon(widget.icon,
-                  size: 16,
-                  color: widget.selected
-                      ? OutlookTheme.primaryBlue
-                      : OutlookTheme.textSecondary),
+              Icon(
+                widget.icon,
+                size: 16,
+                color: widget.selected
+                    ? OutlookTheme.primaryBlue
+                    : OutlookTheme.textSecondary,
+              ),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -231,6 +279,15 @@ class _NavigationEntryState extends State<_NavigationEntry> {
                       : OutlookTheme.folderLabelStyle,
                 ),
               ),
+              if (widget.problem case final String problem)
+                Tooltip(
+                  message: problem,
+                  child: const Icon(
+                    Icons.sync_problem,
+                    size: 14,
+                    color: OutlookTheme.flaggedColor,
+                  ),
+                ),
             ],
           ),
         ),

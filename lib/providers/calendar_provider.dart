@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
@@ -6,6 +7,7 @@ import 'package:uuid/uuid.dart';
 import '../models/calendar_event.dart';
 import '../services/data_store.dart';
 import '../services/notification_service.dart';
+import '../services/sync/graph_pim_sync.dart';
 
 /// State management for the Calendar module.
 class CalendarProvider extends ChangeNotifier {
@@ -19,11 +21,23 @@ class CalendarProvider extends ChangeNotifier {
   Timer? _reminderTimer;
   final Set<String> _remindedKeys = {};
 
-  CalendarProvider({DataStore? store, this._notifications})
+  /// Microsoft calendars (optional).
+  final GraphPimSync? _pim;
+
+  /// Calendars not shown: `local` or a source id.
+  final Set<String> _hidden = {};
+
+  CalendarProvider({DataStore? store, this._notifications, this._pim})
       : _store = store ?? DataStore.instance {
     _viewType = CalendarViewType.values
             .asNameMap()[_store.getString('calendarView') ?? 'month'] ??
         CalendarViewType.month;
+    try {
+      _hidden.addAll(
+          (jsonDecode(_store.getString('hiddenCalendars') ?? '[]') as List)
+              .cast<String>());
+    } catch (_) {}
+    _pim?.addListener(_onSynced);
     if (_notifications != null) {
       _reminderTimer = Timer.periodic(
           const Duration(seconds: 30), (_) => checkReminders(DateTime.now()));
@@ -42,23 +56,76 @@ class CalendarProvider extends ChangeNotifier {
   EventOccurrence? get selectedOccurrence => _selectedOccurrence;
   CalendarViewType get viewType => _viewType;
 
+  void _onSynced() {
+    // The selected event may have been changed or removed by the sync.
+    final selected = _selectedEvent;
+    if (selected != null && _store.getEvent(selected.id) == null) {
+      _selectedEvent = null;
+      _selectedOccurrence = null;
+    }
+    notifyListeners();
+  }
+
+  // ─── Calendars ─────────────────────────────────────────────────────
+
+  /// The local calendar and one per Microsoft account.
+  List<({String? id, String label})> get calendars => [
+        (id: null, label: 'Calendar'),
+        for (final s in _pim?.sources ?? const <({String id, String label})>[])
+          (id: s.id, label: 'Calendar - ${s.label}'),
+      ];
+
+  /// Short name of the calendar [sourceId] for forms and lists.
+  String calendarLabel(String? sourceId) => sourceId == null
+      ? 'Calendar'
+      : 'Calendar - ${_pim?.labelFor(sourceId) ?? 'Microsoft account'}';
+
+  /// The last sync problem of a Microsoft calendar.
+  String? calendarError(String sourceId) =>
+      _pim?.errorFor(sourceId, calendar: true);
+
+  bool isCalendarVisible(String? sourceId) =>
+      !_hidden.contains(sourceId ?? 'local');
+
+  void setCalendarVisible(String? sourceId, bool visible) {
+    final key = sourceId ?? 'local';
+    visible ? _hidden.remove(key) : _hidden.add(key);
+    _store.setString('hiddenCalendars', jsonEncode(_hidden.toList()));
+    notifyListeners();
+  }
+
+  /// Where new appointments go (File > Options can't change it yet: the
+  /// calendar chosen last in the appointment form).
+  String? get defaultCalendarId {
+    final id = _store.getString('defaultCalendar');
+    if (id == null) return null;
+    return calendars.any((c) => c.id == id) ? id : null;
+  }
+
+  set defaultCalendarId(String? id) =>
+      _store.setString('defaultCalendar', id);
+
+  bool _visible(EventOccurrence o) => isCalendarVisible(o.event.sourceId);
+
   List<EventOccurrence> get occurrencesForSelectedDate =>
-      _store.getOccurrencesForDate(_selectedDate);
+      getOccurrencesForDate(_selectedDate);
 
   /// Events (not occurrences) that occur on the selected date.
   List<CalendarEvent> get eventsForSelectedDate =>
       occurrencesForSelectedDate.map((o) => o.event).toList();
 
-  List<CalendarEvent> get allEvents => _store.events;
+  List<CalendarEvent> get allEvents => _store.events
+      .where((e) => isCalendarVisible(e.sourceId))
+      .toList();
 
   List<CalendarEvent> getEventsForDate(DateTime date) =>
-      _store.getOccurrencesForDate(date).map((o) => o.event).toList();
+      getOccurrencesForDate(date).map((o) => o.event).toList();
 
   List<EventOccurrence> getOccurrencesForDate(DateTime date) =>
-      _store.getOccurrencesForDate(date);
+      _store.getOccurrencesForDate(date).where(_visible).toList();
 
   List<EventOccurrence> getOccurrencesInRange(DateTime start, DateTime end) =>
-      _store.getOccurrencesInRange(start, end);
+      _store.getOccurrencesInRange(start, end).where(_visible).toList();
 
   /// First day (Sunday) of the week containing [date].
   static DateTime weekStart(DateTime date) {
@@ -173,7 +240,8 @@ class CalendarProvider extends ChangeNotifier {
   // ─── Event CRUD ────────────────────────────────────────────────────
 
   void addEvent(CalendarEvent event) {
-    _store.saveEvent(event);
+    _store.saveEvent(_pim?.prepareEvent(event) ?? event);
+    _pim?.changed(event.sourceId);
     notifyListeners();
   }
 
@@ -183,7 +251,9 @@ class CalendarProvider extends ChangeNotifier {
   }
 
   void updateEvent(CalendarEvent event) {
+    event = _pim?.prepareEvent(event) ?? event;
     _store.saveEvent(event);
+    _pim?.changed(event.sourceId);
     if (_selectedEvent?.id == event.id) {
       _selectedEvent = event;
       _selectedOccurrence = null;
@@ -192,7 +262,10 @@ class CalendarProvider extends ChangeNotifier {
   }
 
   void removeEvent(String id) {
+    final event = _store.getEvent(id);
+    if (event != null) _pim?.eventDeleted(event);
     _store.removeEvent(id);
+    _pim?.changed(event?.sourceId);
     if (_selectedEvent?.id == id) {
       _selectedEvent = null;
       _selectedOccurrence = null;
@@ -212,6 +285,29 @@ class CalendarProvider extends ChangeNotifier {
     ));
   }
 
+  /// Whether [event] is an occurrence of a series kept on a server, which
+  /// can be deleted as a whole.
+  bool isServerSeriesOccurrence(CalendarEvent event) =>
+      event.seriesMasterId != null;
+
+  /// Deletes the whole series [event] belongs to (Microsoft calendars).
+  void removeSeries(CalendarEvent event) {
+    final master = event.seriesMasterId;
+    if (master == null) return removeEvent(event.id);
+    _pim?.seriesDeleted(event.sourceId, master);
+    for (final e in _store.events
+        .where((e) => e.sourceId == event.sourceId && e.seriesMasterId == master)
+        .toList()) {
+      _store.removeEvent(e.id);
+    }
+    _pim?.changed(event.sourceId);
+    if (_selectedEvent?.seriesMasterId == master) {
+      _selectedEvent = null;
+      _selectedOccurrence = null;
+    }
+    notifyListeners();
+  }
+
   CalendarEvent? eventByUid(String uid) => _store.getEventByUid(uid);
 
   CalendarEvent createDefaultEvent({DateTime? start}) {
@@ -229,6 +325,7 @@ class CalendarProvider extends ChangeNotifier {
       startTime: begin,
       endTime: begin.add(const Duration(minutes: 30)),
       reminder: ReminderTime.fifteenMinutes,
+      sourceId: defaultCalendarId,
       createdAt: now,
       updatedAt: now,
     );
@@ -240,7 +337,7 @@ class CalendarProvider extends ChangeNotifier {
   /// more than an hour ago, and were not reminded about yet.
   List<EventOccurrence> dueReminders(DateTime now) {
     final due = <EventOccurrence>[];
-    final upcoming = _store.getOccurrencesInRange(
+    final upcoming = getOccurrencesInRange(
         now.subtract(const Duration(hours: 1)), now.add(const Duration(days: 3)));
     for (final o in upcoming) {
       final reminder = o.event.reminder;
@@ -277,6 +374,7 @@ class CalendarProvider extends ChangeNotifier {
   @override
   void dispose() {
     _reminderTimer?.cancel();
+    _pim?.removeListener(_onSynced);
     super.dispose();
   }
 }

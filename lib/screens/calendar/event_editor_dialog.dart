@@ -67,6 +67,7 @@ class EventEditorDialog extends StatefulWidget {
   static const notesFieldKey = Key('eventEditor.notes');
   static const allDayCheckboxKey = Key('eventEditor.allDay');
   static const repeatFieldKey = Key('eventEditor.repeat');
+  static const calendarFieldKey = Key('eventEditor.calendar');
 
   @override
   State<EventEditorDialog> createState() => _EventEditorDialogState();
@@ -92,10 +93,16 @@ class _EventEditorDialogState extends State<EventEditorDialog> {
   String? _attendeeError;
   bool _hadAttendees = false;
 
+  /// Calendar of a new appointment: `local` or a Microsoft calendar.
+  late String _calendar;
+
   CalendarEvent? get _original => widget.event ?? widget.occurrence?.event;
   bool get _isEditing => _original != null;
   bool get _isSeries => _original?.isRecurring ?? false;
   bool get _isRecurring => _recurrence != RecurrenceRule.none;
+
+  /// An occurrence of a recurring meeting from a Microsoft calendar.
+  bool get _isServerOccurrence => _original?.seriesMasterId != null;
 
   @override
   void initState() {
@@ -150,6 +157,11 @@ class _EventEditorDialogState extends State<EventEditorDialog> {
     }
     _until = e?.recurrenceUntil ??
         DateTime(_start.year, _start.month + 3, _start.day);
+    _calendar = (e?.sourceId ??
+            (e == null
+                ? context.read<CalendarProvider>().defaultCalendarId
+                : null)) ??
+        'local';
   }
 
   @override
@@ -313,7 +325,11 @@ class _EventEditorDialogState extends State<EventEditorDialog> {
       updatedAt: DateTime.now(),
     );
     if (original == null) {
-      cal.addEvent(event);
+      final calendar = _calendar == 'local' ? null : _calendar;
+      cal.defaultCalendarId = calendar;
+      cal.addEvent(event.sourceId == calendar
+          ? event
+          : CalendarEvent.fromMap({...event.toMap(), 'sourceId': calendar}));
     } else {
       cal.updateEvent(event);
     }
@@ -449,7 +465,35 @@ class _EventEditorDialogState extends State<EventEditorDialog> {
             onSubmitted: (_) => _save(),
           ),
         ),
+        ..._buildCalendar(),
       ];
+
+  /// Which calendar: chosen for new appointments, shown for others.
+  List<Widget> _buildCalendar() {
+    final cal = context.read<CalendarProvider>();
+    final calendars = cal.calendars;
+    if (calendars.length < 2 && _calendar == 'local') return const [];
+    return [
+      const SizedBox(height: 8),
+      FormRow(
+        label: 'Calendar',
+        child: _isEditing
+            ? Text(cal.calendarLabel(_original!.sourceId), style: _fieldStyle)
+            : FormDropdown<String>(
+                key: EventEditorDialog.calendarFieldKey,
+                value: _calendar,
+                items: [
+                  for (final c in calendars)
+                    DropdownMenuItem(
+                      value: c.id ?? 'local',
+                      child: dropdownItemText(c.label),
+                    ),
+                ],
+                onChanged: (id) => setState(() => _calendar = id),
+              ),
+      ),
+    ];
+  }
 
   List<Widget> _buildWhen() {
     final rangeError = _rangeError;
@@ -509,6 +553,17 @@ class _EventEditorDialogState extends State<EventEditorDialog> {
   }
 
   List<Widget> _buildRecurrence() {
+    if (_isServerOccurrence) {
+      return const [
+        FormRow(
+          label: 'Repeat',
+          child: Text(
+            'One occurrence of a recurring meeting; changes apply to it only',
+            style: TextStyle(fontSize: 12, color: OutlookTheme.textSecondary),
+          ),
+        ),
+      ];
+    }
     final seriesError = _seriesError;
     return [
       FormRow(

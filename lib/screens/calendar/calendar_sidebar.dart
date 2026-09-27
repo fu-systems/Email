@@ -27,6 +27,8 @@ class CalendarSidebar extends StatelessWidget {
         children: [
           DateNavigator(),
           Divider(height: 1),
+          _MyCalendars(),
+          Divider(height: 1),
           Padding(
             padding: EdgeInsets.fromLTRB(12, 10, 12, 4),
             child: Text('Upcoming', style: OutlookTheme.folderLabelBoldStyle),
@@ -338,6 +340,69 @@ class _UpcomingItem extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// "My Calendars": the local calendar and those of Microsoft accounts,
+/// each shown or hidden with its checkbox.
+class _MyCalendars extends StatelessWidget {
+  const _MyCalendars();
+
+  @override
+  Widget build(BuildContext context) {
+    final cal = context.watch<CalendarProvider>();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 8, 8, 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(left: 8, bottom: 2),
+            child: Text('My Calendars', style: OutlookTheme.folderLabelBoldStyle),
+          ),
+          for (final c in cal.calendars) ...[
+            InkWell(
+              onTap: () =>
+                  cal.setCalendarVisible(c.id, !cal.isCalendarVisible(c.id)),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 32,
+                    height: 26,
+                    child: Checkbox(
+                      value: cal.isCalendarVisible(c.id),
+                      visualDensity: VisualDensity.compact,
+                      onChanged: (v) => cal.setCalendarVisible(c.id, v ?? true),
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      c.label,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12.5),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (c.id != null && cal.calendarError(c.id!) != null)
+              Padding(
+                padding: const EdgeInsets.only(left: 32, bottom: 4),
+                child: Tooltip(
+                  message: cal.calendarError(c.id!)!,
+                  child: const Text(
+                    'Not synced (hover for details)',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: OutlookTheme.flaggedColor,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ],
       ),
     );
   }

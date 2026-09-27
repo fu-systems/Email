@@ -20,6 +20,7 @@ import '../services/html_sanitizer.dart';
 import '../services/ical_service.dart';
 import '../services/mime_converter.dart';
 import '../services/print_service.dart';
+import '../services/sync/graph_pim_sync.dart';
 import '../theme/outlook_theme.dart';
 import 'common.dart';
 import 'email_html_view.dart';
@@ -438,7 +439,31 @@ class _InviteBarState extends State<_InviteBar> {
     if (event == null) return;
     final calendar = context.read<CalendarProvider>();
     final mail = context.read<MailProvider>();
+    final pim = context.read<GraphPimSync?>();
     setState(() => _busy = true);
+
+    // Microsoft accounts: Exchange put the meeting in the calendar; the
+    // answer goes through Graph, which also tells the organizer.
+    final account = mail.accountById(widget.message.accountId);
+    if (response != null && account != null && account.isGraph && pim != null) {
+      try {
+        if (await pim.respondToInvitation(account, event.uid, response)) {
+          if (!mounted) return;
+          setState(() {
+            _busy = false;
+            _response = response.label;
+          });
+          showStatusMessage(context, '${response.label}: ${event.title}');
+          return;
+        }
+      } catch (e) {
+        if (!mounted) return;
+        setState(() => _busy = false);
+        showStatusMessage(context, 'Could not send the response: $e',
+            isError: true);
+        return;
+      }
+    }
 
     final existing = calendar.eventByUid(event.uid);
     if (response == InviteResponse.declined) {

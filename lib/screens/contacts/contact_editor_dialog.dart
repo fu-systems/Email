@@ -116,9 +116,59 @@ class _ContactEditorDialogState extends State<ContactEditorDialog> {
 
   bool get _isEditing => widget.contact != null;
 
+  /// Address book of a new contact (null: the local one).
+  String? _addressBook;
+
+  /// Whether to show the address book: there are Microsoft ones.
+  bool get _showAddressBook =>
+      context.read<ContactsProvider>().addressBooks.length > 1;
+
+  /// "Save to" for new contacts, the address book of existing ones.
+  List<Widget> _addressBookChoice() {
+    if (!_showAddressBook) return const [];
+    final provider = context.read<ContactsProvider>();
+    return [
+      Row(
+        children: [
+          const Text('Save to:', style: TextStyle(fontSize: 13)),
+          const SizedBox(width: 12),
+          Expanded(
+            child: _isEditing
+                ? Text(
+                    provider.addressBookLabel(widget.contact!.sourceId),
+                    style: const TextStyle(fontSize: 13),
+                  )
+                : DropdownButton<String>(
+                    value: _addressBook ?? 'local',
+                    isDense: true,
+                    isExpanded: true,
+                    items: [
+                      for (final book in provider.addressBooks)
+                        DropdownMenuItem(
+                          value: book.id ?? 'local',
+                          child: Text(
+                            book.label,
+                            style: const TextStyle(fontSize: 13),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                    ],
+                    onChanged: (v) => setState(
+                      () => _addressBook = v == null || v == 'local' ? null : v,
+                    ),
+                  ),
+          ),
+        ],
+      ),
+      const SizedBox(height: 6),
+    ];
+  }
+
   @override
   void initState() {
     super.initState();
+    _addressBook = widget.contact?.sourceId ??
+        context.read<ContactsProvider>().createEmpty().sourceId;
     final c = widget.contact;
     if (c != null) {
       _firstName.text = c.firstName ?? '';
@@ -284,7 +334,10 @@ class _ContactEditorDialogState extends State<ContactEditorDialog> {
       zipCode: cleanText(_zip.text),
       country: cleanText(_country.text),
     );
-    final base = widget.contact ?? provider.createEmpty();
+    var base = widget.contact ?? provider.createEmpty();
+    if (!_isEditing && base.sourceId != _addressBook) {
+      base = Contact.fromMap({...base.toMap(), 'sourceId': _addressBook});
+    }
     final saved = base.withDetails(
       firstName: firstName,
       lastName: lastName,
@@ -338,7 +391,8 @@ class _ContactEditorDialogState extends State<ContactEditorDialog> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const _FormSectionLabel('Full name', first: true),
+          ..._addressBookChoice(),
+          _FormSectionLabel('Full name', first: !_showAddressBook),
           _pair(
             _textField(_firstName, 'First name', autofocus: true),
             _textField(_lastName, 'Last name'),

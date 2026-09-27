@@ -51,7 +51,10 @@ Future<bool> deleteOccurrenceWithPrompt(
   if (event == null) return false;
   final title = displayTitle(event);
 
-  if (!event.isRecurring) {
+  // Occurrences of a Microsoft series are separate appointments here, but
+  // the series can still be deleted as a whole.
+  final serverSeries = cal.isServerSeriesOccurrence(event);
+  if (!event.isRecurring && !serverSeries) {
     final confirmed = await showConfirmDialog(
       context,
       title: 'Delete Appointment',
@@ -105,6 +108,12 @@ Future<bool> deleteOccurrenceWithPrompt(
     ),
   );
   switch (choice) {
+    case _DeleteChoice.occurrence when serverSeries:
+      cal.removeEvent(event.id);
+      return true;
+    case _DeleteChoice.series when serverSeries:
+      cal.removeSeries(event);
+      return true;
     case _DeleteChoice.occurrence:
       cal.removeOccurrence(EventOccurrence(
         event: event,

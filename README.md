@@ -43,11 +43,13 @@ Microsoft Outlook 2013, built with Flutter.
 - Reminders and color categories
 - Meeting invitations in mail can be accepted, marked tentative or declined; your reply goes to the organizer. Time zones from the invitation are honored.
 - Import and export iCalendar (.ics) files, email an appointment, and print the agenda
+- **Microsoft calendars:** a Microsoft account connected through Graph brings its calendar next to the local one (six months back, eighteen ahead). Show or hide each calendar in the sidebar and choose which one new appointments go to. Changes go both ways, recurring meetings appear as Outlook shows them, and invitations in that calendar are answered through Microsoft.
 
 **People**
 - Contacts with several emails and phones, an address, company, job title and notes
 - Contact groups (distribution lists)
 - Import and export in CSV (Outlook and Gmail layouts) and vCard formats
+- **Microsoft contacts:** the contacts of a Microsoft account connected through Graph form an address book of their own, kept in sync both ways; choose where new contacts are saved
 
 **Everywhere**
 - Outlook 2013 look: ribbon, File backstage, folder pane, status bar and navigation bar
@@ -141,7 +143,7 @@ Everything is stored in `~/.local/share/systems.fu.look_in` (or `$XDG_DATA_HOME/
 |---|---|
 | `look_in.db` | SQLite database: accounts, folders, cached messages and attachments, contacts, calendar, rules, Outbox and settings |
 | `master.key` | Random 256-bit key that encrypts passwords and sign-in tokens when they aren't in the system keyring (mode 0600) |
-| `look_in.log` | Uncaught errors, for troubleshooting (truncated at 1 MB) |
+| `look_in.log` | Uncaught errors and Microsoft calendar and contacts sync problems, for troubleshooting (truncated at 1 MB) |
 
 Back up the whole folder to keep everything, including the key. Removing an account (**File → Info → Remove Account**) also deletes its cached mail and unsent Outbox messages from this computer; the mail on the server is not touched.
 
@@ -172,6 +174,8 @@ lib/
     backends/                  One interface for server mailboxes: IMAP with
                                SMTP, and Microsoft Graph (client with retries,
                                paging and $batch; delta sync)
+    sync/                      Microsoft calendar and contacts through Graph:
+                               two-way sync and Graph ↔ event/contact mapping
     mime_converter.dart        MIME parsing and building
     ical_service.dart          iCalendar parsing and generation, meeting replies
     contacts_io.dart           CSV and vCard import/export
@@ -225,7 +229,7 @@ The system-keyring tests write real keyring items, so they are skipped unless en
 tool/test_with_keyring.sh test/secret_store_test.dart
 ```
 
-`test/graph_mail_test.dart` runs the Microsoft Graph backend against a fake Graph server (`test/support/fake_graph_server.dart`) with delta sync, moves, `$batch`, sendMail and throttling. To try the app without a Microsoft account, start the fake identity and Graph servers and point Look In at them:
+`test/graph_mail_test.dart` runs the Microsoft Graph backend against a fake Graph server (`test/support/fake_graph_server.dart`) with delta sync, moves, `$batch`, sendMail and throttling, and `test/graph_pim_test.dart` syncs calendars and contacts against it (recurring series, conflicts, invitations). To try the app without a Microsoft account, start the fake identity and Graph servers and point Look In at them:
 
 ```bash
 dart run test/support/fake_identity_server_main.dart &   # prints its address
@@ -242,10 +246,13 @@ To try the app against GreenMail, add an account for `alice@example.com` (passwo
 
 ## Known limitations
 
-- Microsoft accounts sync mail only; calendar and contacts sync through Microsoft Graph is planned. There is no Exchange ActiveSync or EWS (Microsoft is retiring EWS in 2026-27).
+- Microsoft calendars and contacts sync only with **Connect with: Microsoft Graph**, and only the default calendar and the default contacts folder. Other calendars, shared calendars, contact subfolders and contact photos aren't synced. There is no Exchange ActiveSync or EWS (Microsoft is retiring EWS in 2026-27).
+- A recurring meeting from a Microsoft calendar is edited one occurrence at a time; deleting can remove one occurrence or the whole series.
+- Notes of Microsoft events show as plain text. Editing the notes saves them as plain text (links stay as addresses); other changes leave formatted notes, and details Look In doesn't show, as they are.
+- When an event or contact changed both in Look In and elsewhere before a sync, the newer change wins and the other is dropped (it is noted in the error log).
 - With Microsoft Graph, a folder starts with its newest 200 messages; older ones load with **More messages on the server**, and changes to those older messages made elsewhere aren't picked up.
 - Gmail needs an app password; Sign in with Google isn't available yet.
-- The calendar and contacts are local. They are not synced over CalDAV or CardDAV; exchange them through .ics, .vcf and .csv files or meeting invitations.
+- Apart from Microsoft accounts, the calendar and contacts are local. They are not synced over CalDAV or CardDAV; exchange them through .ics, .vcf and .csv files or meeting invitations.
 - The editor has no tables. Replies and forwards keep the original's tables, but they aren't editable in the message.
 - Printing opens a print-ready page in your web browser.
 - Held and delayed messages are sent by Look In itself, so it must be running at that time; a message whose time passed while Look In was closed goes out at the next start.

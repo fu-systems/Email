@@ -13,6 +13,7 @@ import 'screens/home_screen.dart';
 import 'screens/settings/account_setup_screen.dart';
 import 'services/data_store.dart';
 import 'services/notification_service.dart';
+import 'services/sync/graph_pim_sync.dart';
 
 /// Material, widgets and editor (flutter_quill) localizations.
 const appLocalizationsDelegates = <LocalizationsDelegate<dynamic>>[
@@ -38,17 +39,23 @@ class LookInApp extends StatelessWidget {
         ),
         ChangeNotifierProvider(create: (_) => NavigationProvider()),
         ChangeNotifierProvider(create: (_) => AccountProvider()),
+        ChangeNotifierProvider(create: (_) => GraphPimSync()),
         ChangeNotifierProvider(
           create: (context) => MailProvider(
             notifications: context.read<NotificationService>(),
+            pim: context.read<GraphPimSync>(),
           )..attachAccounts(context.read<AccountProvider>()),
         ),
         ChangeNotifierProvider(
           create: (context) => CalendarProvider(
             notifications: context.read<NotificationService>(),
+            pim: context.read<GraphPimSync>(),
           ),
         ),
-        ChangeNotifierProvider(create: (_) => ContactsProvider()),
+        ChangeNotifierProvider(
+          create: (context) =>
+              ContactsProvider(pim: context.read<GraphPimSync>()),
+        ),
       ],
       child: MaterialApp(
         title: 'Look In',

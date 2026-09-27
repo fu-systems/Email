@@ -18,6 +18,7 @@ import '../services/data_store.dart';
 import '../services/mail_backend.dart';
 import '../services/mime_converter.dart';
 import '../services/notification_service.dart';
+import '../services/sync/graph_pim_sync.dart';
 import 'account_provider.dart';
 
 /// Connection state of one account.
@@ -101,9 +102,14 @@ class MailProvider extends ChangeNotifier {
   bool _disposed = false;
   AccountProvider? _accountSource;
 
-  MailProvider({DataStore? store, NotificationService? notifications})
+  /// Calendar and contacts of Microsoft accounts, synced with their mail.
+  final GraphPimSync? pim;
+
+  MailProvider(
+      {DataStore? store, NotificationService? notifications, this.pim})
       : _store = store ?? DataStore.instance,
         notifications = notifications ?? NotificationService() {
+    pim?.onLocalChange = _pimChanged;
     _readingPane = ReadingPanePosition.values
             .asNameMap()[_store.getString('readingPane') ?? 'right'] ??
         ReadingPanePosition.right;
@@ -350,6 +356,7 @@ class MailProvider extends ChangeNotifier {
     final previous = {for (final a in _accounts) a.id: a};
     _accounts = List.of(accounts);
     _defaultAccountId = defaultAccountId;
+    pim?.setAccounts(accounts);
     final newIds = accounts.map((a) => a.id).toSet();
 
     for (final removed in oldIds.difference(newIds)) {
@@ -522,6 +529,28 @@ class MailProvider extends ChangeNotifier {
         .map((a) => syncAccount(a.id, full: full)));
   }
 
+  /// Syncs calendar and contacts of a Microsoft account; their problems
+  /// are shown in Calendar and People, not as the account's mail status.
+  Future<void> _syncPim(EmailAccount account) async {
+    final sync = pim;
+    if (sync == null) return;
+    try {
+      await sync.sync(account);
+    } catch (e) {
+      debugPrint('Calendar and contacts sync of ${account.emailAddress}: $e');
+    }
+  }
+
+  /// A local change to a Microsoft calendar or address book: send it now
+  /// when the account is reachable (otherwise with the next sync).
+  void _pimChanged(String accountId) {
+    final account = accountById(accountId);
+    if (account == null || !account.isGraph || !_canUseNetwork(accountId)) {
+      return;
+    }
+    unawaited(_syncPim(account));
+  }
+
   /// Synchronizes one account. Errors mark the account offline/failed.
   Future<void> syncAccount(String accountId, {bool full = false}) async {
     final account = accountById(accountId);
@@ -537,6 +566,7 @@ class MailProvider extends ChangeNotifier {
       } else {
         await _syncRemote(account, full: full);
       }
+      if (account.isGraph) await _syncPim(account);
       _setOnline(accountId);
       _lastSync = DateTime.now();
       _initialSyncDone.add(accountId);

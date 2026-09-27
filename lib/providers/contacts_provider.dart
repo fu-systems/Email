@@ -3,6 +3,7 @@ import 'package:uuid/uuid.dart';
 
 import '../models/contact.dart';
 import '../services/data_store.dart';
+import '../services/sync/graph_pim_sync.dart';
 
 /// A suggestion for recipient auto-complete.
 class RecipientSuggestion {
@@ -32,7 +33,59 @@ class ContactsProvider extends ChangeNotifier {
   String? _selectedLetter;
   bool _showGroups = false;
 
-  ContactsProvider({DataStore? store}) : _store = store ?? DataStore.instance;
+  /// Microsoft address books (optional).
+  final GraphPimSync? _pim;
+
+  /// Shows only this address book: `local` or a source id; null for all.
+  String? _addressBook;
+
+  ContactsProvider({DataStore? store, this._pim})
+      : _store = store ?? DataStore.instance {
+    _pim?.addListener(_onSynced);
+  }
+
+  void _onSynced() {
+    final selected = _selectedContact;
+    if (selected != null) _selectedContact = _store.getContact(selected.id);
+    notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _pim?.removeListener(_onSynced);
+    super.dispose();
+  }
+
+  /// The local address book and one per Microsoft account.
+  List<({String? id, String label})> get addressBooks => [
+        (id: null, label: 'Contacts'),
+        for (final s in _pim?.sources ?? const <({String id, String label})>[])
+          (id: s.id, label: 'Contacts - ${s.label}'),
+      ];
+
+  String addressBookLabel(String? sourceId) => sourceId == null
+      ? 'Contacts'
+      : 'Contacts - ${_pim?.labelFor(sourceId) ?? 'Microsoft account'}';
+
+  /// The last sync problem of a Microsoft address book.
+  String? addressBookError(String sourceId) =>
+      _pim?.errorFor(sourceId, calendar: false);
+
+  /// The address book shown (`local`, a source id, or null for all).
+  String? get addressBookFilter => _addressBook;
+
+  /// Number of contacts in an address book (null: the local one).
+  int countIn(String? sourceId) =>
+      _store.contacts.where((c) => c.sourceId == sourceId).length;
+
+  void setAddressBookFilter(String? key) {
+    _addressBook = key;
+    _selectedContact = null;
+    notifyListeners();
+  }
+
+  bool _inFilter(Contact c) =>
+      _addressBook == null || (c.sourceId ?? 'local') == _addressBook;
 
   // Getters
   Contact? get selectedContact => _selectedContact;
@@ -48,6 +101,7 @@ class ContactsProvider extends ChangeNotifier {
     var list = _searchQuery.isNotEmpty
         ? _store.searchContacts(_searchQuery)
         : _store.contacts;
+    if (_addressBook != null) list = list.where(_inFilter).toList();
     if (_selectedLetter != null) {
       list = list.where((c) {
         final first = c.fileAs.isNotEmpty ? c.fileAs[0].toUpperCase() : '#';
@@ -110,7 +164,9 @@ class ContactsProvider extends ChangeNotifier {
   // ─── CRUD ──────────────────────────────────────────────────────────
 
   void addContact(Contact contact) {
+    contact = _pim?.prepareContact(contact) ?? contact;
     _store.saveContact(contact);
+    _pim?.changed(contact.sourceId);
     _selectedContact = contact;
     _selectedGroup = null;
     notifyListeners();
@@ -132,7 +188,9 @@ class ContactsProvider extends ChangeNotifier {
   }
 
   void updateContact(Contact contact) {
+    contact = _pim?.prepareContact(contact) ?? contact;
     _store.saveContact(contact);
+    _pim?.changed(contact.sourceId);
     if (_selectedContact?.id == contact.id) {
       _selectedContact = contact;
     }
@@ -140,7 +198,10 @@ class ContactsProvider extends ChangeNotifier {
   }
 
   void removeContact(String id) {
+    final contact = _store.getContact(id);
+    if (contact != null) _pim?.contactDeleted(contact);
     _store.removeContact(id);
+    _pim?.changed(contact?.sourceId);
     if (_selectedContact?.id == id) {
       _selectedContact = null;
     }
@@ -148,10 +209,14 @@ class ContactsProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// A new contact, in the address book shown (the local one when all
+  /// are shown).
   Contact createEmpty() {
     final now = DateTime.now();
+    final book = _addressBook;
     return Contact(
       id: const Uuid().v4(),
+      sourceId: book == null || book == 'local' ? null : book,
       createdAt: now,
       updatedAt: now,
     );
