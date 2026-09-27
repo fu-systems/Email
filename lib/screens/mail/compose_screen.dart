@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:clock/clock.dart';
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_quill/flutter_quill.dart';
@@ -15,14 +17,18 @@ import '../../models/email_message.dart';
 import '../../models/outgoing_message.dart';
 import '../../providers/contacts_provider.dart';
 import '../../providers/mail_provider.dart';
+import '../../services/data_store.dart';
 import '../../services/file_dialogs.dart';
 import '../../services/html_sanitizer.dart';
 import '../../services/mime_converter.dart';
 import '../../services/rich_text_codec.dart';
+import '../../services/spell_checker.dart';
+import '../../services/system_clipboard.dart';
 import '../../theme/outlook_theme.dart';
 import '../../widgets/common.dart';
 import '../../widgets/compose/format_controls.dart';
 import '../../widgets/compose/rich_body_editor.dart';
+import '../../widgets/compose/spelling.dart';
 import '../../widgets/email_html_view.dart';
 import '../../widgets/ribbon/ribbon_toolbar.dart';
 import 'address_book_dialog.dart';
@@ -46,6 +52,10 @@ class ComposeScreen extends StatefulWidget {
   final String initialBody;
   final List<Attachment> initialAttachments;
 
+  /// A message taken back from the Outbox (Undo after Send), to edit and
+  /// send again.
+  final OutgoingMessage? resume;
+
   const ComposeScreen({
     super.key,
     this.mode = ComposeMode.newMessage,
@@ -55,6 +65,7 @@ class ComposeScreen extends StatefulWidget {
     this.initialSubject = '',
     this.initialBody = '',
     this.initialAttachments = const [],
+    this.resume,
   });
 
   /// Preference: compose new messages in HTML (default) or plain text.
@@ -74,7 +85,24 @@ class _ComposeScreenState extends State<ComposeScreen> {
   final _editorFocus = FocusNode(debugLabel: 'message body');
   final _editorScroll = ScrollController();
   final _toFocus = FocusNode();
-  final QuillController _quill = QuillController.basic();
+  final _editorKey = GlobalKey<EditorState>();
+  final _bodyAreaKey = GlobalKey();
+  // The clipboard hooks are marked experimental in flutter_quill 11 (the
+  // version is locked in pubspec.lock).
+  late final QuillController _quill = QuillController.basic(
+    config: QuillControllerConfig(
+      // ignore: experimental_member_use
+      clipboardConfig: QuillClipboardConfig(
+        // Pictures, copied files and HTML are handled here; the editor's
+        // own HTML import loses paragraph breaks.
+        // ignore: experimental_member_use
+        onClipboardPaste: _pasteRich,
+        onImagePaste: (bytes) async => savePastedPicture(bytes),
+        // ignore: experimental_member_use
+        enableExternalRichPaste: false,
+      ),
+    ),
+  );
 
   final List<Attachment> _attachments = [];
   EmailAccount? _account;
@@ -87,6 +115,20 @@ class _ComposeScreenState extends State<ComposeScreen> {
   String? _outboxId;
   String _initialSnapshot = '';
   String _ribbonTab = 'MESSAGE';
+
+  /// Delay Delivery: not sent before this time.
+  DateTime? _deliverAfter;
+
+  /// Threading headers of a message reopened from the Outbox.
+  String? _inReplyTo;
+  String? _references;
+
+  /// Files are being dragged over the window.
+  bool _dragging = false;
+
+  SpellChecker? _spellChecker;
+  SpellingHighlighter? _spelling;
+  PlainTextSpellCheckService? _plainSpelling;
 
   /// HTML (rich text editor) or plain text.
   bool _html = true;
@@ -101,10 +143,12 @@ class _ComposeScreenState extends State<ComposeScreen> {
   /// know whether the signature may be swapped when the account changes.
   String _pristineBody = '';
 
+  late final MailProvider _mail;
+
   @override
   void initState() {
     super.initState();
-    final mail = context.read<MailProvider>();
+    final mail = _mail = context.read<MailProvider>();
     _account =
         (widget.original != null
             ? mail.accountById(widget.original!.accountId)
@@ -113,6 +157,20 @@ class _ComposeScreenState extends State<ComposeScreen> {
     _html = mail.preference(ComposeScreen.htmlPreference, defaultValue: true);
     _showBcc = false;
     _prefill();
+    _startSpelling();
+  }
+
+  Future<void> _startSpelling() async {
+    final store = DataStore.instance;
+    final checker = await Spelling.checker(store);
+    if (!mounted || checker == null) return;
+    setState(() {
+      _spellChecker = checker;
+      if (Spelling.asYouType(store)) {
+        _spelling = SpellingHighlighter(_quill, checker);
+        _plainSpelling = PlainTextSpellCheckService(checker);
+      }
+    });
   }
 
   /// Whether the user changed anything since the message was opened or
@@ -170,6 +228,14 @@ class _ComposeScreenState extends State<ComposeScreen> {
 
   void _prefill() {
     final original = widget.original;
+    if (widget.resume case final OutgoingMessage message) {
+      _prefillOutgoing(message);
+      _bodyController.selection = const TextSelection.collapsed(offset: 0);
+      _pristineBody = _bodySnapshot;
+      // Taken back from the Outbox: closing asks whether to save it.
+      _initialSnapshot = '';
+      return;
+    }
     switch (widget.mode) {
       case ComposeMode.newMessage:
         _toController.text = _joinAddresses(widget.initialTo);
@@ -232,33 +298,56 @@ class _ComposeScreenState extends State<ComposeScreen> {
     _loadOriginal(original, forward: false);
   }
 
+  /// Fills the window from a message that was in the Outbox.
+  void _prefillOutgoing(OutgoingMessage message) {
+    final account = context.read<MailProvider>().accountById(message.accountId);
+    if (account != null) _account = account;
+    _toController.text = _joinAddresses(message.to);
+    _ccController.text = _joinAddresses(message.cc);
+    _bccController.text = _joinAddresses(message.bcc);
+    _showBcc = message.bcc.isNotEmpty;
+    _subjectController.text = message.subject;
+    _bodyController.text = message.textBody;
+    // Inline pictures come back from the editor document.
+    _attachments.addAll(
+      message.attachments.where(
+        (a) =>
+            !a.isInline ||
+            (message.quotedHtml?.contains('cid:${a.contentId}') ?? false),
+      ),
+    );
+    _importance = message.importance;
+    _draftMessageId = message.draftMessageId;
+    _inReplyTo = message.inReplyTo;
+    _references = message.references;
+    if (message.isScheduled(clock.now()) &&
+        message.sendAfter!.difference(message.createdAt) >
+            const Duration(minutes: 1)) {
+      _deliverAfter = message.sendAfter;
+    }
+    final delta = message.editorDelta;
+    _html = delta != null;
+    if (delta != null) {
+      try {
+        _setEditor(Delta.fromJson(jsonDecode(delta) as List));
+      } catch (_) {
+        _setEditor(RichTextCodec.fromPlainText(message.textBody));
+      }
+      _quotedHtml = message.quotedHtml;
+      _quotedText = _quotedHtml == null
+          ? null
+          : '\n\n${htmlToPlainText(_quotedHtml!)}';
+    }
+  }
+
   void _prefillDraft(EmailMessage original) {
     final mail = context.read<MailProvider>();
     final outboxItem = mail.outboxItem(original);
     if (outboxItem != null) {
       _outboxId = outboxItem.id;
-      _toController.text = _joinAddresses(outboxItem.to);
-      _ccController.text = _joinAddresses(outboxItem.cc);
-      _bccController.text = _joinAddresses(outboxItem.bcc);
-      _showBcc = outboxItem.bcc.isNotEmpty;
-      _subjectController.text = outboxItem.subject;
-      _bodyController.text = outboxItem.textBody;
-      _attachments.addAll(outboxItem.attachments.where((a) => !a.isInline));
-      _importance = outboxItem.importance;
-      _draftMessageId = outboxItem.draftMessageId;
-      final delta = outboxItem.editorDelta;
-      _html = delta != null;
-      if (delta != null) {
-        try {
-          _setEditor(Delta.fromJson(jsonDecode(delta) as List));
-        } catch (_) {
-          _setEditor(RichTextCodec.fromPlainText(outboxItem.textBody));
-        }
-        _quotedHtml = outboxItem.quotedHtml;
-        _quotedText = _quotedHtml == null
-            ? null
-            : '\n\n${htmlToPlainText(_quotedHtml!)}';
-      }
+      // Not sent while it is being edited.
+      mail.setOutboxItemOpen(outboxItem.id, true);
+      _prefillOutgoing(outboxItem);
       return;
     }
     _draftMessageId = original.id;
@@ -417,6 +506,8 @@ class _ComposeScreenState extends State<ComposeScreen> {
     _editorFocus.dispose();
     _editorScroll.dispose();
     _toFocus.dispose();
+    if (_outboxId case final String id) _mail.setOutboxItemOpen(id, false);
+    _spelling?.dispose();
     _quill.dispose();
     super.dispose();
   }
@@ -568,10 +659,19 @@ class _ComposeScreenState extends State<ComposeScreen> {
   Future<void> _attachFiles() async {
     final paths = await FileDialogs.pickFiles(context, title: 'Insert File');
     if (paths.isEmpty || !mounted) return;
+    _attachPaths(paths);
+  }
+
+  /// Adds files as attachments (folders are skipped).
+  void _attachPaths(Iterable<String> paths) {
+    final skipped = <String>[];
     setState(() {
       for (final path in paths) {
         final file = File(path);
-        if (!file.existsSync()) continue;
+        if (!file.existsSync()) {
+          skipped.add(p.basename(path));
+          continue;
+        }
         _attachments.add(
           Attachment(
             id: const Uuid().v4(),
@@ -583,6 +683,14 @@ class _ComposeScreenState extends State<ComposeScreen> {
         );
       }
     });
+    if (skipped.isNotEmpty) {
+      showStatusMessage(
+        context,
+        'Folders can\'t be attached: ${skipped.join(', ')}',
+        isError: true,
+      );
+      return;
+    }
     final total = _attachments.fold<int>(0, (s, a) => s + a.size);
     if (total > 20 * 1024 * 1024 && mounted) {
       showStatusMessage(
@@ -614,6 +722,117 @@ class _ComposeScreenState extends State<ComposeScreen> {
       TextFormatting.insertImage(_quill, path);
     }
     _editorFocus.requestFocus();
+  }
+
+  static bool _isPicture(String path) =>
+      MimeConverter.guessMimeType(path).startsWith('image/');
+
+  /// Pastes pictures, copied files and formatted text; returns false to
+  /// let the editor paste plain text.
+  Future<bool> _pasteRich() async {
+    final content = await readClipboardContent();
+    if (!mounted) return true;
+    switch (content) {
+      case ClipboardFiles(:final paths):
+        // Like Outlook: copied pictures go in the message, other files
+        // are attached.
+        for (final path in paths.where(_isPicture)) {
+          TextFormatting.insertImage(_quill, path);
+        }
+        final others = paths.where((path) => !_isPicture(path)).toList();
+        if (others.isNotEmpty) _attachPaths(others);
+        return true;
+      case ClipboardPicture(:final path):
+        TextFormatting.insertImage(_quill, path);
+        return true;
+      case ClipboardHtml(:final html):
+        final clean = sanitizeEmailHtml(html, allowRemoteImages: true).html;
+        final delta = RichTextCodec.fromHtml(clean);
+        if (RichTextCodec.isEmpty(delta.toJson().cast())) return false;
+        TextFormatting.insertDelta(_quill, _withoutTrailingBreak(delta));
+        return true;
+      case null:
+        return false;
+    }
+  }
+
+  /// A pasted fragment ends with a line break of its own; drop it so the
+  /// paste continues the current line.
+  static Delta _withoutTrailingBreak(Delta delta) {
+    final ops = delta.toList();
+    if (ops.isEmpty) return delta;
+    final last = ops.last;
+    if (last.data is! String || last.attributes != null) return delta;
+    final text = last.data as String;
+    if (!text.endsWith('\n')) return delta;
+    final result = Delta();
+    for (final op in ops.take(ops.length - 1)) {
+      result.push(op);
+    }
+    if (text.length > 1) result.insert(text.substring(0, text.length - 1));
+    return result;
+  }
+
+  /// Ctrl+Shift+V: pastes the clipboard's text without formatting.
+  Future<void> _pastePlainText() async {
+    final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
+    if (text == null || text.isEmpty || !mounted) return;
+    final sel = _quill.selection;
+    final start = sel.isValid ? sel.start : _quill.document.length - 1;
+    final length = sel.isValid ? sel.end - sel.start : 0;
+    _quill.replaceText(
+      start,
+      length,
+      text,
+      TextSelection.collapsed(offset: start + text.length),
+    );
+  }
+
+  /// Files dropped on the window: pictures dropped on a formatted message
+  /// go in the message where they are dropped, everything else is
+  /// attached.
+  void _onDrop(DropDoneDetails details) {
+    setState(() => _dragging = false);
+    final paths = [
+      for (final item in details.files)
+        if (item.path.isNotEmpty) item.path,
+    ];
+    if (paths.isEmpty) return;
+    final pictures = _html && _isOverBody(details.globalPosition)
+        ? paths.where(_isPicture).toList()
+        : const <String>[];
+    if (pictures.isNotEmpty) {
+      _placeCaretAt(details.globalPosition);
+      for (final path in pictures) {
+        TextFormatting.insertImage(_quill, path);
+      }
+      _editorFocus.requestFocus();
+    }
+    final others = paths.where((path) => !pictures.contains(path)).toList();
+    if (others.isNotEmpty) _attachPaths(others);
+  }
+
+  bool _isOverBody(Offset global) {
+    final box = _bodyAreaKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return false;
+    return (box.localToGlobal(Offset.zero) & box.size).contains(global);
+  }
+
+  /// Moves the caret to the text under [global], if there is text there.
+  void _placeCaretAt(Offset global) {
+    try {
+      final editor = _editorKey.currentState?.renderEditor;
+      if (editor == null) return;
+      final local = editor.globalToLocal(global);
+      if (!(Offset.zero & editor.size).contains(local)) return;
+      final position = editor.getPositionForOffset(global);
+      _quill.updateSelection(
+        TextSelection.collapsed(offset: position.offset),
+        ChangeSource.local,
+      );
+    } catch (_) {
+      // Keep the current caret.
+    }
   }
 
   void _insertSignature() {
@@ -775,10 +994,10 @@ class _ComposeScreenState extends State<ComposeScreen> {
       editorDelta: body.delta,
       quotedHtml: _html ? _quotedHtml : null,
       attachments: [..._visibleAttachments, ...body.inline],
-      inReplyTo: isReply ? original?.messageId : null,
-      references: refs.isEmpty ? null : refs,
+      inReplyTo: isReply ? original?.messageId : _inReplyTo,
+      references: refs.isEmpty ? _references : refs,
       importance: _importance,
-      createdAt: DateTime.now(),
+      createdAt: clock.now(),
       draftMessageId: _draftMessageId,
     );
   }
@@ -818,13 +1037,48 @@ class _ComposeScreenState extends State<ComposeScreen> {
       if (!ok || !mounted) return;
     }
 
+    // Options > "Always check spelling before sending".
+    var toSend = message;
+    if (_spellChecker != null && Spelling.beforeSend(DataStore.instance)) {
+      final complete = await showSpellingDialog(
+        context,
+        target: _spellingTarget(),
+        checker: _spellChecker!,
+        announceCompletion: false,
+      );
+      if (!mounted) return;
+      if (!complete &&
+          !await showConfirmDialog(
+            context,
+            title: 'Look In',
+            message:
+                'The spelling check was stopped. Do you want to send '
+                'the message anyway?',
+            confirmLabel: 'Send',
+          )) {
+        return;
+      }
+      if (!mounted) return;
+      // Corrections changed the text.
+      toSend = _buildMessage() ?? message;
+    }
+
+    final mail = context.read<MailProvider>();
+    final now = clock.now();
+    final delay = mail.sendDelaySeconds;
+    final deliverAfter = _deliverAfter;
+    if (deliverAfter != null && deliverAfter.isAfter(now)) {
+      toSend = toSend.copyWith(sendAfter: deliverAfter);
+    } else if (delay > 0) {
+      toSend = toSend.copyWith(sendAfter: now.add(Duration(seconds: delay)));
+    }
+
     setState(() {
       _isSending = true;
       _error = null;
     });
-    final mail = context.read<MailProvider>();
     if (_outboxId != null) mail.removeFromOutbox(_outboxId!);
-    final result = await mail.send(message);
+    final result = await mail.send(toSend);
     if (!mounted) return;
     setState(() => _isSending = false);
     switch (result) {
@@ -838,10 +1092,167 @@ class _ComposeScreenState extends State<ComposeScreen> {
               'will be sent when you are back online.',
         );
         break;
+      case SendResult.scheduled:
+        if (deliverAfter != null && deliverAfter.isAfter(now)) {
+          _close(
+            message:
+                'The message waits in your Outbox and will be sent '
+                '${describeSendTime(deliverAfter)}. Look In must be '
+                'running then.',
+          );
+        } else {
+          _closeWithUndo(toSend, Duration(seconds: delay));
+        }
+        break;
       case SendResult.failed:
         setState(() => _error = mail.error ?? 'The message could not be sent.');
         break;
     }
+  }
+
+  /// Closes the window with "Sending..." and an Undo button that brings
+  /// the message back while it waits in the Outbox.
+  void _closeWithUndo(OutgoingMessage message, Duration delay) {
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final mail = context.read<MailProvider>();
+    final mode = widget.mode;
+    final original = widget.original;
+    navigator.pop();
+    messenger?.showSnackBar(
+      SnackBar(
+        content: const Text('Sending...'),
+        behavior: SnackBarBehavior.floating,
+        width: 520,
+        duration: delay,
+        // Snack bars with an action stay until dismissed by default.
+        persist: false,
+        action: SnackBarAction(
+          label: 'Undo',
+          textColor: const Color(0xFF9FD0FF),
+          onPressed: () {
+            final restored = mail.cancelScheduled(message.id);
+            if (restored == null) {
+              messenger.showSnackBar(
+                const SnackBar(
+                  content: Text('The message has already been sent.'),
+                  behavior: SnackBarBehavior.floating,
+                  width: 520,
+                ),
+              );
+              return;
+            }
+            navigator.push(
+              MaterialPageRoute(
+                builder: (_) => ComposeScreen(
+                  mode: mode,
+                  original: original,
+                  resume: restored.copyWith(),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  // ─── Spelling and delivery options ─────────────────────────────────
+
+  SpellingTarget _spellingTarget() => _html
+      ? QuillSpellingTarget(_quill)
+      : TextSpellingTarget(
+          _bodyController,
+          checkedLength: () {
+            final quoted = _bodyController.text.indexOf(
+              '-----Original Message-----',
+            );
+            return quoted < 0 ? _bodyController.text.length : quoted;
+          },
+        );
+
+  /// Review > Spelling & Grammar (F7).
+  Future<void> _checkSpelling() async {
+    final checker = _spellChecker;
+    if (checker == null) {
+      showStatusMessage(
+        context,
+        'Spell checking needs hunspell and a dictionary, for example the '
+        'hunspell and hunspell-en-us packages.',
+        isError: true,
+      );
+      return;
+    }
+    await showSpellingDialog(
+      context,
+      target: _spellingTarget(),
+      checker: checker,
+    );
+    if (!mounted) return;
+    (_html ? _editorFocus : _bodyFocus).requestFocus();
+  }
+
+  /// Review > Word Count.
+  Future<void> _wordCount() async {
+    final text = _html
+        ? RichTextCodec.toPlainText(
+            _quill.document.toDelta().toJson().cast<Map<String, dynamic>>(),
+          )
+        : _bodyController.text;
+    final words = RegExp(r'\S+').allMatches(text).length;
+    final characters = text.replaceAll('\n', '').length;
+    final noSpaces = text.replaceAll(RegExp(r'\s'), '').length;
+    final paragraphs = text
+        .split('\n')
+        .where((l) => l.trim().isNotEmpty)
+        .length;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => OutlookDialog(
+        title: 'Word Count',
+        width: 320,
+        actions: [
+          ElevatedButton(
+            autofocus: true,
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+        child: Table(
+          columnWidths: const {1: IntrinsicColumnWidth()},
+          children: [
+            for (final entry in {
+              'Words': words,
+              'Characters (no spaces)': noSpaces,
+              'Characters (with spaces)': characters,
+              'Paragraphs': paragraphs,
+            }.entries)
+              TableRow(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 3),
+                    child: Text(entry.key),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 3),
+                    child: Text('${entry.value}', textAlign: TextAlign.right),
+                  ),
+                ],
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Options > Delay Delivery: "Do not deliver before".
+  Future<void> _delayDelivery() async {
+    final result = await showDialog<_DelayChoice>(
+      context: context,
+      builder: (_) => _DelayDeliveryDialog(initial: _deliverAfter),
+    );
+    if (result == null || !mounted) return;
+    setState(() => _deliverAfter = result.at);
   }
 
   Future<bool> _saveDraft({bool closeAfter = false}) async {
@@ -1095,6 +1506,19 @@ class _ComposeScreenState extends State<ComposeScreen> {
           ),
           format,
           tags,
+          RibbonGroupDefinition(
+            label: 'More Options',
+            items: [
+              RibbonItem(
+                label: 'Delay\nDelivery',
+                icon: Icons.schedule_send_outlined,
+                isLarge: true,
+                isChecked: _deliverAfter != null,
+                tooltip: 'Delay Delivery: send this message later',
+                onTap: _delayDelivery,
+              ),
+            ],
+          ),
         ],
       ),
       RibbonTabDefinition(
@@ -1102,6 +1526,45 @@ class _ComposeScreenState extends State<ComposeScreen> {
         groups: [
           format,
           RibbonGroupDefinition(label: 'Basic Text', custom: basicText),
+        ],
+      ),
+      RibbonTabDefinition(
+        label: 'REVIEW',
+        groups: [
+          RibbonGroupDefinition(
+            label: 'Proofing',
+            items: [
+              RibbonItem(
+                label: 'Spelling &\nGrammar',
+                icon: Icons.spellcheck,
+                isLarge: true,
+                tooltip: _spellChecker == null
+                    ? 'Spell checking needs hunspell and a dictionary'
+                    : 'Spelling & Grammar (F7)',
+                onTap: _checkSpelling,
+              ),
+              RibbonItem(
+                label: 'Word\nCount',
+                icon: Icons.format_list_numbered,
+                isLarge: true,
+                onTap: _wordCount,
+              ),
+            ],
+          ),
+          RibbonGroupDefinition(
+            label: 'Language',
+            items: [
+              RibbonItem(
+                label: _spellChecker == null
+                    ? 'Language'
+                    : languageDisplayName(_spellChecker!.language),
+                icon: Icons.translate,
+                tooltip: 'Change the dictionary in File > Options > Mail',
+                enabled: false,
+                onTap: () {},
+              ),
+            ],
+          ),
         ],
       ),
     ];
@@ -1116,6 +1579,14 @@ class _ComposeScreenState extends State<ComposeScreen> {
     child: TextField(
       controller: _bodyController,
       focusNode: _bodyFocus,
+      spellCheckConfiguration: _plainSpelling == null
+          ? null
+          : SpellCheckConfiguration(
+              spellCheckService: _plainSpelling,
+              misspelledTextStyle: misspelledStyle,
+            ),
+      contextMenuBuilder: (context, state) =>
+          plainTextSpellingMenu(context, state, _spellChecker),
       autofocus: widget.mode != ComposeMode.newMessage,
       maxLines: null,
       expands: true,
@@ -1155,7 +1626,15 @@ class _ComposeScreenState extends State<ComposeScreen> {
                 focusNode: _editorFocus,
                 scrollController: _editorScroll,
                 autofocus: widget.mode != ComposeMode.newMessage,
+                spelling: _spelling,
+                editorKey: _editorKey,
                 shortcuts: {
+                  const SingleActivator(
+                    LogicalKeyboardKey.keyV,
+                    control: true,
+                    shift: true,
+                  ): _pastePlainText,
+                  const SingleActivator(LogicalKeyboardKey.f7): _checkSpelling,
                   const SingleActivator(LogicalKeyboardKey.keyK, control: true):
                       _insertLink,
                   const SingleActivator(
@@ -1221,82 +1700,296 @@ class _ComposeScreenState extends State<ComposeScreen> {
         // Runs while the Navigator is busy; close afterwards.
         if (!didPop) Future.microtask(_requestClose);
       },
-      child: CallbackShortcuts(
-        bindings: {
-          const SingleActivator(LogicalKeyboardKey.enter, control: true): _send,
-          const SingleActivator(LogicalKeyboardKey.keyS, control: true): () =>
-              _saveDraft(),
-          // As in Outlook: a hyperlink in the message, Check Names elsewhere.
-          const SingleActivator(LogicalKeyboardKey.keyK, control: true): () =>
-              _html && _editorFocus.hasFocus ? _insertLink() : _checkNames(),
-          const SingleActivator(LogicalKeyboardKey.escape): _requestClose,
-        },
-        // No autofocus here: the To field (new message) or the body
-        // (reply/forward) takes focus; shortcuts bubble up from there.
-        child: Focus(
-          child: Scaffold(
-            body: Column(
-              children: [
-                _TitleStrip(title: _windowTitle, onClose: _requestClose),
-                // The ribbon never takes focus from the message.
-                ExcludeFocus(
-                  child: RibbonToolbar(
-                    tabs: _ribbonTabs(),
-                    showFileTab: false,
-                    activeTab: _ribbonTab,
-                    onTabChanged: (tab) => setState(() => _ribbonTab = tab),
-                  ),
-                ),
-                if (_error != null)
-                  _InfoBar(
-                    text: _error!,
-                    isError: true,
-                    onDismiss: () => setState(() => _error = null),
-                  ),
-                if (_isLoadingOriginal)
-                  const _InfoBar(text: 'Downloading the original message...'),
-                if (_importance != MessageImportance.normal)
-                  _InfoBar(
-                    text: _importance == MessageImportance.high
-                        ? 'This message will be sent with High importance.'
-                        : 'This message will be sent with Low importance.',
-                  ),
-                Expanded(
-                  child: Container(
-                    color: Colors.white,
-                    child: Column(
-                      children: [
-                        _HeaderFields(
-                          accounts: accounts,
-                          account: _account,
-                          onAccountChanged: _changeAccount,
-                          onSend: _send,
-                          isSending: _isSending,
-                          toController: _toController,
-                          ccController: _ccController,
-                          bccController: _bccController,
-                          subjectController: _subjectController,
-                          toFocus: _toFocus,
-                          showBcc: _showBcc,
-                          onShowBcc: () => setState(() => _showBcc = true),
-                          onAddressBook: _openAddressBook,
-                          onSubjectChanged: () => setState(() {}),
-                        ),
-                        if (_visibleAttachments.isNotEmpty)
-                          _AttachmentStrip(
-                            attachments: _visibleAttachments,
-                            onRemove: (a) =>
-                                setState(() => _attachments.remove(a)),
-                          ),
-                        Expanded(child: _html ? _richBody() : _plainBody()),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
+      child: _windowShortcuts(accounts),
+    );
+  }
+
+  Widget _windowShortcuts(List<EmailAccount> accounts) => CallbackShortcuts(
+    bindings: {
+      const SingleActivator(LogicalKeyboardKey.enter, control: true): _send,
+      const SingleActivator(LogicalKeyboardKey.keyS, control: true): () =>
+          _saveDraft(),
+      // As in Outlook: a hyperlink in the message, Check Names elsewhere.
+      const SingleActivator(LogicalKeyboardKey.keyK, control: true): () =>
+          _html && _editorFocus.hasFocus ? _insertLink() : _checkNames(),
+      const SingleActivator(LogicalKeyboardKey.f7): _checkSpelling,
+    },
+    // No autofocus here: the To field (new message) or the body
+    // (reply/forward) takes focus; shortcuts bubble up from there.
+    child: Focus(
+      child: Scaffold(
+        // Esc closes the window unless something closer to the focus
+        // dismisses first (e.g. the address suggestions). This sits inside
+        // the Scaffold: its own Esc action (closing a drawer) would
+        // otherwise end the search.
+        body: Shortcuts(
+          shortcuts: const {
+            SingleActivator(LogicalKeyboardKey.escape): DismissIntent(),
+          },
+          child: Actions(
+            actions: {
+              DismissIntent: CallbackAction<DismissIntent>(
+                onInvoke: (_) {
+                  _requestClose();
+                  return null;
+                },
+              ),
+            },
+            child: _windowBody(accounts),
           ),
         ),
+      ),
+    ),
+  );
+
+  Widget _windowBody(List<EmailAccount> accounts) => Column(
+    children: [
+      _TitleStrip(title: _windowTitle, onClose: _requestClose),
+      // The ribbon never takes focus from the message.
+      ExcludeFocus(
+        child: RibbonToolbar(
+          tabs: _ribbonTabs(),
+          showFileTab: false,
+          activeTab: _ribbonTab,
+          onTabChanged: (tab) => setState(() => _ribbonTab = tab),
+        ),
+      ),
+      if (_error != null)
+        _InfoBar(
+          text: _error!,
+          isError: true,
+          onDismiss: () => setState(() => _error = null),
+        ),
+      if (_isLoadingOriginal)
+        const _InfoBar(text: 'Downloading the original message...'),
+      if (_importance != MessageImportance.normal)
+        _InfoBar(
+          text: _importance == MessageImportance.high
+              ? 'This message will be sent with High importance.'
+              : 'This message will be sent with Low importance.',
+        ),
+      if (_deliverAfter case final DateTime at)
+        _InfoBar(
+          text:
+              'This message will be sent ${describeSendTime(at)}. '
+              'It waits in the Outbox until then.',
+          onDismiss: () => setState(() => _deliverAfter = null),
+        ),
+      Expanded(
+        child: DropTarget(
+          onDragEntered: (_) => setState(() => _dragging = true),
+          onDragExited: (_) => setState(() => _dragging = false),
+          onDragDone: _onDrop,
+          child: Stack(
+            children: [
+              Positioned.fill(child: _messageArea(accounts)),
+              if (_dragging)
+                Positioned.fill(
+                  child: IgnorePointer(child: _DropHint(pictures: _html)),
+                ),
+            ],
+          ),
+        ),
+      ),
+    ],
+  );
+
+  Widget _messageArea(List<EmailAccount> accounts) => Container(
+    color: Colors.white,
+    child: Column(
+      children: [
+        _HeaderFields(
+          accounts: accounts,
+          account: _account,
+          onAccountChanged: _changeAccount,
+          onSend: _send,
+          isSending: _isSending,
+          toController: _toController,
+          ccController: _ccController,
+          bccController: _bccController,
+          subjectController: _subjectController,
+          toFocus: _toFocus,
+          showBcc: _showBcc,
+          onShowBcc: () => setState(() => _showBcc = true),
+          onAddressBook: _openAddressBook,
+          onSubjectChanged: () => setState(() {}),
+        ),
+        if (_visibleAttachments.isNotEmpty)
+          _AttachmentStrip(
+            attachments: _visibleAttachments,
+            onRemove: (a) => setState(() => _attachments.remove(a)),
+          ),
+        Expanded(key: _bodyAreaKey, child: _html ? _richBody() : _plainBody()),
+      ],
+    ),
+  );
+}
+
+/// Shown while files are dragged over the message window.
+class _DropHint extends StatelessWidget {
+  final bool pictures;
+  const _DropHint({required this.pictures});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: OutlookTheme.hoverColor.withValues(alpha: 0.85),
+        border: Border.all(color: OutlookTheme.lightBlue, width: 2),
+      ),
+      alignment: Alignment.center,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(
+            Icons.attach_file,
+            size: 36,
+            color: OutlookTheme.lightBlue,
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Drop files here to attach them',
+            style: TextStyle(fontSize: 16, color: OutlookTheme.textPrimary),
+          ),
+          if (pictures)
+            const Text(
+              'Pictures dropped on the message go in the message',
+              style: TextStyle(color: OutlookTheme.textSecondary),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DelayChoice {
+  final DateTime? at;
+  const _DelayChoice(this.at);
+}
+
+/// Options > Delay Delivery, like Outlook's "Do not deliver before".
+class _DelayDeliveryDialog extends StatefulWidget {
+  final DateTime? initial;
+  const _DelayDeliveryDialog({this.initial});
+
+  @override
+  State<_DelayDeliveryDialog> createState() => _DelayDeliveryDialogState();
+}
+
+class _DelayDeliveryDialogState extends State<_DelayDeliveryDialog> {
+  late bool _enabled = true;
+  late DateTime _day;
+  late int _minutes;
+
+  @override
+  void initState() {
+    super.initState();
+    // Outlook suggests 5:00 PM tomorrow.
+    final now = clock.now();
+    final at = widget.initial ?? DateTime(now.year, now.month, now.day + 1, 17);
+    _day = DateTime(at.year, at.month, at.day);
+    _minutes = at.hour * 60 + at.minute;
+  }
+
+  DateTime get _at => _day.add(Duration(minutes: _minutes));
+
+  List<int> get _times {
+    final times = [for (var m = 0; m < 24 * 60; m += 30) m];
+    if (!times.contains(_minutes)) times.add(_minutes);
+    return times..sort();
+  }
+
+  Future<void> _pickDay() async {
+    final now = clock.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _day,
+      firstDate: DateTime(now.year, now.month, now.day),
+      lastDate: DateTime(now.year + 2),
+    );
+    if (picked != null) setState(() => _day = picked);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final inPast = _enabled && !_at.isAfter(clock.now());
+    final timeFormat = DateFormat('h:mm a');
+    return OutlookDialog(
+      title: 'Delay Delivery',
+      width: 480,
+      actions: [
+        OutlinedButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          autofocus: true,
+          onPressed: inPast
+              ? null
+              : () => Navigator.of(
+                  context,
+                ).pop(_DelayChoice(_enabled ? _at : null)),
+          child: const Text('OK'),
+        ),
+      ],
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          CheckboxListTile(
+            contentPadding: EdgeInsets.zero,
+            controlAffinity: ListTileControlAffinity.leading,
+            dense: true,
+            value: _enabled,
+            onChanged: (v) => setState(() => _enabled = v ?? false),
+            title: const Text('Do not deliver before'),
+          ),
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 12,
+            runSpacing: 8,
+            children: [
+              const SizedBox(width: 20),
+              OutlinedButton.icon(
+                onPressed: _enabled ? _pickDay : null,
+                icon: const Icon(Icons.calendar_today_outlined, size: 16),
+                label: Text(DateFormat('EEE M/d/yyyy').format(_day)),
+              ),
+              DropdownButton<int>(
+                value: _minutes,
+                isDense: true,
+                onChanged: _enabled
+                    ? (v) => setState(() => _minutes = v ?? _minutes)
+                    : null,
+                items: [
+                  for (final m in _times)
+                    DropdownMenuItem(
+                      value: m,
+                      child: Text(
+                        timeFormat.format(
+                          DateTime(2000).add(Duration(minutes: m)),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            inPast
+                ? 'Choose a time in the future.'
+                : 'The message waits in the Outbox until then. Look In '
+                      'must be running for it to be sent.',
+            style: TextStyle(
+              fontSize: 12,
+              color: inPast
+                  ? OutlookTheme.flaggedColor
+                  : OutlookTheme.textSecondary,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1718,7 +2411,15 @@ class _RecipientFieldState extends State<RecipientField> {
       optionsBuilder: (value) {
         final token = _lastToken(value.text);
         if (token.length < 2) return const Iterable.empty();
-        return contacts.suggestions(token);
+        final suggestions = contacts.suggestions(token);
+        // Nothing to suggest for an address that is already complete.
+        final typed = EmailAddress.parse(token).address.toLowerCase();
+        if (suggestions.any(
+          (s) => !s.isGroup && s.address.toLowerCase() == typed,
+        )) {
+          return const Iterable.empty();
+        }
+        return suggestions;
       },
       displayStringForOption: (option) => _replaceLastToken(
         widget.controller.text,

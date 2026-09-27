@@ -15,7 +15,7 @@ Phase 4: Ribbon & UI Wiring         [##########] 100%  COMPLETE
 Phase 5: Linux Platform & Build     [##########] 100%  COMPLETE
 Phase 6: Persistence & Offline      [##########] 100%  COMPLETE
 Phase 7: Advanced Features          [##########] 100%  COMPLETE
-Phase 8: Next                       [###-------]  30%  IN PROGRESS  <-- current
+Phase 8: Next                       [####------]  40%  IN PROGRESS  <-- current
 ```
 
 ---
@@ -168,6 +168,7 @@ Deviations:
 | Secret Service keyring for passwords and tokens | **Done** (File > Options > Security) |
 | CalDAV / CardDAV sync | Calendar and contacts are local-only today |
 | Rich-text compose editor | **Done**: flutter_quill, tabbed message ribbon, inline pictures, HTML signatures |
+| Compose polish | **Done**: drag-and-drop and pasted attachments/pictures, rich paste, undo send, Delay Delivery, hunspell spell checking (as you type and F7) |
 | IMAP IDLE push | Sync currently polls on each account's interval |
 | System tray icon and single-instance handling (`mailto:` links) | |
 | Flatpak / AppImage packaging | |
@@ -240,9 +241,12 @@ lib/
 | `crypto` | PKCE (SHA-256) for Sign in with Microsoft |
 | `flutter_html`, `flutter_html_table` | HTML email rendering |
 | `flutter_quill`, `vsc_quill_delta_to_html` | Rich text compose editor, editor document to email HTML |
+| `desktop_drop` | Files dragged onto the message window |
+| `clock` | Testable time for scheduled sending |
 | `html` | HTML sanitizing (pinned below 0.15.7 for flutter_html 3.0.0) |
 | `file_picker` | File dialogs through the XDG portal |
 | `dbus` | Desktop notifications, Secret Service keyring |
+| hunspell / enchant (runtime, optional) | Spell checking, through their ispell pipe mode |
 | `url_launcher` | Opening links, files and print pages |
 | `path_provider`, `path` | Data directory |
 | `shared_preferences` | Only to migrate data from older versions |

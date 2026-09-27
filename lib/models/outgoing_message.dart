@@ -1,7 +1,24 @@
+import 'package:clock/clock.dart';
+import 'package:intl/intl.dart';
+
 import 'email_message.dart';
 
+/// When a scheduled message goes out, for the Outbox and status messages:
+/// "at 4:05 PM", "tomorrow at 9:00 AM" or "on Mon 9/28/2026 at 9:00 AM".
+String describeSendTime(DateTime at, {DateTime? now}) {
+  now ??= clock.now();
+  final time = DateFormat('h:mm a').format(at);
+  final today = DateTime(now.year, now.month, now.day);
+  final day = DateTime(at.year, at.month, at.day);
+  final days = day.difference(today).inDays;
+  if (days == 0) return 'at $time';
+  if (days == 1) return 'tomorrow at $time';
+  return 'on ${DateFormat('EEE M/d/yyyy').format(at)} at $time';
+}
+
 /// A message composed in Look In that is about to be sent, saved as a
-/// draft, or waiting in the Outbox because sending failed (e.g. offline).
+/// draft, or waiting in the Outbox: because sending failed (e.g. offline),
+/// or until its [sendAfter] time (undo send and delayed delivery).
 class OutgoingMessage {
   final String id;
   final String accountId;
@@ -36,6 +53,9 @@ class OutgoingMessage {
   /// so it can be replaced when the draft is saved again or sent.
   final String? draftMessageId;
 
+  /// Not sent before this time; the message waits in the Outbox.
+  final DateTime? sendAfter;
+
   const OutgoingMessage({
     required this.id,
     required this.accountId,
@@ -54,11 +74,19 @@ class OutgoingMessage {
     required this.createdAt,
     this.lastError,
     this.draftMessageId,
+    this.sendAfter,
   });
 
   List<EmailAddress> get allRecipients => [...to, ...cc, ...bcc];
 
-  OutgoingMessage copyWith({String? lastError, String? draftMessageId}) {
+  /// Whether the message is waiting for its [sendAfter] time.
+  bool isScheduled(DateTime now) => sendAfter?.isAfter(now) ?? false;
+
+  OutgoingMessage copyWith({
+    String? lastError,
+    String? draftMessageId,
+    DateTime? sendAfter,
+  }) {
     return OutgoingMessage(
       id: id,
       accountId: accountId,
@@ -77,6 +105,7 @@ class OutgoingMessage {
       createdAt: createdAt,
       lastError: lastError ?? this.lastError,
       draftMessageId: draftMessageId ?? this.draftMessageId,
+      sendAfter: sendAfter ?? this.sendAfter,
     );
   }
 
@@ -98,6 +127,7 @@ class OutgoingMessage {
         'createdAt': createdAt.toIso8601String(),
         'lastError': lastError,
         'draftMessageId': draftMessageId,
+        'sendAfter': ?sendAfter?.toIso8601String(),
       };
 
   factory OutgoingMessage.fromMap(Map<String, dynamic> map) {
@@ -126,6 +156,7 @@ class OutgoingMessage {
       createdAt: DateTime.parse(map['createdAt'] as String),
       lastError: map['lastError'] as String?,
       draftMessageId: map['draftMessageId'] as String?,
+      sendAfter: DateTime.tryParse(map['sendAfter'] as String? ?? ''),
     );
   }
 }

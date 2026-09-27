@@ -93,16 +93,18 @@ Future<bool> showConfirmDialog(
   required String message,
   String confirmLabel = 'OK',
   bool destructive = false,
+  bool showCancel = true,
 }) async {
   final result = await showDialog<bool>(
     context: context,
     builder: (ctx) => OutlookDialog(
       title: title,
       actions: [
-        OutlinedButton(
-          onPressed: () => Navigator.of(ctx).pop(false),
-          child: const Text('Cancel'),
-        ),
+        if (showCancel)
+          OutlinedButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
         ElevatedButton(
           autofocus: true,
           style: destructive

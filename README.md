@@ -21,10 +21,13 @@ Microsoft Outlook 2013, built with Flutter.
 - Several accounts at once, each with its own folder tree, plus a Favorites section
 - Offline first: messages, folders and attachments are cached locally. Changes made offline (read, flag, move, delete) are queued, and mail sent offline waits in the Outbox until you reconnect.
 - HTML messages are sanitized before display. Remote pictures are blocked until you allow them for a message or a sender.
-- Open, save and "save all" for attachments; attach files by picker
+- Open, save and "save all" for attachments. Attach files with the picker, by dragging them onto the message window, or by pasting files copied in your file manager.
 - Compose, reply, reply all and forward, with importance, Bcc, address-book lookup, recipient autocomplete and contact-group expansion
 - Rich text messages in an Outlook-style message window (MESSAGE / INSERT / OPTIONS / FORMAT TEXT ribbon): fonts, sizes, colors, highlight, bold/italic/underline, lists, indentation, alignment, quotes, links and inline pictures (sent as `cid:` parts). Plain text is one click away, per message or as the default.
 - Replies and forwards keep the original's HTML (tables included) below your text; formatted signatures per account
+- Paste pictures (such as screenshots) and formatted text from web pages and documents straight into a message; Ctrl+Shift+V pastes plain text
+- Spelling: misspelled words are underlined as you type, with suggestions on right-click, and **Review → Spelling & Grammar** (F7) goes through them one by one. You can also check spelling before every send. Uses hunspell (or enchant) with your installed dictionaries.
+- **Undo send:** hold sent messages for 5, 10 or 30 seconds (File → Options → Mail) and take them back from the "Sending..." bar. **Delay Delivery** (Options tab) keeps a message in the Outbox until a date and time you choose.
 - Drafts saved to the server, and a Sent copy saved automatically
 - Missing Sent, Drafts, Trash, Junk and Archive folders are created on demand.
 - Search the current folder or all mailboxes; a server search finds mail that isn't cached
@@ -74,6 +77,8 @@ SQLite is compiled into the app (via the `sqlite3` package's build hook), so no 
 Optional at runtime:
 - `xdg-desktop-portal`, `zenity` or `kdialog` for native file dialogs. Without them Look In falls back to its own dialog.
 - A notification daemon for desktop notifications.
+- `hunspell` and a dictionary (for example `hunspell-en-us`) for spell checking; `enchant-2` also works.
+- `wl-clipboard` (Wayland) or `xclip` (X11) to paste pictures, copied files and formatted text. Without them pictures still paste under X11 through a bundled helper, and text always pastes.
 
 ### Build and run
 
@@ -112,11 +117,13 @@ On first launch the wizard asks for your name and email address and looks up the
 | Ctrl+R / Ctrl+Shift+R / Ctrl+F | Reply / Reply All / Forward |
 | Ctrl+Enter | Send (in a message window) |
 | Ctrl+S | Save draft or appointment |
-| Ctrl+K | Check names (in a message window) |
+| Ctrl+K | Check names in an address box; insert a hyperlink in the message |
+| F7 | Spelling & Grammar (in a message window) |
+| Ctrl+Shift+V | Paste as plain text (in a message) |
 | Delete or Ctrl+D | Delete |
 | Ctrl+Q / Ctrl+U | Mark as read / unread |
 | Insert | Flag / unflag |
-| Ctrl+Shift+V | Move to folder |
+| Ctrl+Shift+V | Move to folder (main window) |
 | Ctrl+Shift+I | Go to Inbox |
 | Ctrl+E or F3 | Search |
 | F9 / Shift+F9 | Send/Receive all folders / current folder |
@@ -124,7 +131,7 @@ On first launch the wizard asks for your name and email address and looks up the
 | Ctrl+A | Select all messages |
 | Ctrl+P | Print |
 | Ctrl+Alt+1…4 | Calendar Day / Work Week / Week / Month |
-| Esc | Close a window or dialog |
+| Esc | Close address suggestions, then the window or dialog |
 
 ## Your data
 
@@ -166,6 +173,9 @@ lib/
     ical_service.dart          iCalendar parsing and generation, meeting replies
     contacts_io.dart           CSV and vCard import/export
     html_sanitizer.dart        Safe HTML display, quoting, HTML↔text
+    rich_text_codec.dart       Editor document ↔ HTML and plain text
+    spell_checker.dart         hunspell/enchant pipe, dictionaries, user words
+    system_clipboard.dart      Pictures, files and HTML from the clipboard
     oauth/                     Sign in with Microsoft: PKCE loopback flow,
                                token refresh, app registration sources
     autoconfig_service.dart    ISPDB, autoconfig and MX discovery
@@ -173,12 +183,14 @@ lib/
     notification_service.dart  Desktop notifications over D-Bus
     file_dialogs.dart          Portal / zenity / kdialog file dialogs
     print_service.dart         Printable HTML
-  providers/                   Mail (sync, offline queue, Outbox, rules),
+  providers/                   Mail (sync, offline queue, Outbox with
+                               scheduled sending, rules),
                                accounts, calendar, contacts, navigation
   screens/                     Home + ribbons, backstage, mail, compose,
                                calendar, people, account wizard
   widgets/                     Ribbon, folder pane, message list, reading pane,
-                               status bar, navigation bar, dialogs
+                               status bar, navigation bar, dialogs;
+                               compose/: editor, format controls, spelling
 linux/                         GTK runner (application id systems.fu.look_in)
 tool/                          Test helpers (throwaway keyring session)
 packaging/                     Desktop entry and install script
@@ -210,6 +222,8 @@ The system-keyring tests write real keyring items, so they are skipped unless en
 tool/test_with_keyring.sh test/secret_store_test.dart
 ```
 
+The spell-checker tests also talk to the real hunspell when it and an `en_US` dictionary are installed.
+
 To try the app against GreenMail, add an account for `alice@example.com` (password `secret`). Use server `127.0.0.1`, IMAP port 3143, SMTP port 3025 and no encryption.
 
 ## Known limitations
@@ -219,6 +233,8 @@ To try the app against GreenMail, add an account for `alice@example.com` (passwo
 - The calendar and contacts are local. They are not synced over CalDAV or CardDAV; exchange them through .ics, .vcf and .csv files or meeting invitations.
 - The editor has no tables. Replies and forwards keep the original's tables, but they aren't editable in the message.
 - Printing opens a print-ready page in your web browser.
+- Held and delayed messages are sent by Look In itself, so it must be running at that time; a message whose time passed while Look In was closed goes out at the next start.
+- Spell checking doesn't check grammar.
 - There is no system tray icon.
 - Sync fetches the most recent messages of each folder. Older ones are fetched with **More messages on the server** at the end of the message list.
 - Recurring meetings from another time zone are expanded in your local time. If the two zones change daylight-saving time on different dates, an occurrence can be off by an hour in the weeks between.

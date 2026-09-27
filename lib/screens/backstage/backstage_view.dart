@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -9,6 +10,7 @@ import '../../models/folder.dart';
 import '../../providers/account_provider.dart';
 import '../../providers/mail_provider.dart';
 import '../../services/data_store.dart';
+import '../../services/spell_checker.dart';
 import '../../theme/outlook_theme.dart';
 import '../../widgets/common.dart';
 import '../../widgets/compose/signature_editor.dart';
@@ -609,6 +611,203 @@ class _SecretStoreOptionState extends State<_SecretStoreOption> {
   }
 }
 
+class _SpellingOptions extends StatefulWidget {
+  final DataStore store;
+  final Widget Function(String label, String key, {bool defaultValue}) toggle;
+
+  const _SpellingOptions({required this.store, required this.toggle});
+
+  @override
+  State<_SpellingOptions> createState() => _SpellingOptionsState();
+}
+
+class _SpellingOptionsState extends State<_SpellingOptions> {
+  late final Future<SpellingSetup?> _setup = Spelling.setup();
+
+  Future<void> _editDictionary() async {
+    final checker = await Spelling.checker(widget.store);
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (_) =>
+          _CustomDictionaryDialog(store: widget.store, checker: checker),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<SpellingSetup?>(
+      future: _setup,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const SizedBox(height: 24);
+        }
+        final setup = snapshot.data;
+        if (setup == null) {
+          return const Text(
+            'Spell checking needs hunspell and a dictionary. Install them '
+            'with your package manager (for example the hunspell and '
+            'hunspell-en-us packages), then restart Look In.',
+            style: TextStyle(fontSize: 12, color: OutlookTheme.textSecondary),
+          );
+        }
+        final language = setup.defaultLanguage(
+          preferred: widget.store.getString(Spelling.languageKey),
+        );
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            widget.toggle(
+              'Check spelling as you type',
+              Spelling.asYouTypeKey,
+              defaultValue: true,
+            ),
+            widget.toggle(
+              'Always check spelling before sending',
+              Spelling.beforeSendKey,
+            ),
+            Row(
+              children: [
+                const Text(
+                  'Dictionary language:',
+                  style: TextStyle(fontSize: 13),
+                ),
+                const SizedBox(width: 12),
+                DropdownButton<String>(
+                  value: language,
+                  isDense: true,
+                  items: [
+                    for (final l in setup.languages)
+                      DropdownMenuItem(
+                        value: l,
+                        child: Text(languageDisplayName(l)),
+                      ),
+                  ],
+                  onChanged: (v) async {
+                    if (v == null) return;
+                    await Spelling.setLanguage(widget.store, v);
+                    if (mounted) setState(() {});
+                  },
+                ),
+                const SizedBox(width: 16),
+                OutlinedButton(
+                  onPressed: _editDictionary,
+                  child: const Text('Custom Dictionary...'),
+                ),
+              ],
+            ),
+            const Text(
+              'Changes apply to message windows you open next.',
+              style: TextStyle(fontSize: 12, color: OutlookTheme.textSecondary),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// The words added with "Add to Dictionary".
+class _CustomDictionaryDialog extends StatefulWidget {
+  final DataStore store;
+  final SpellChecker? checker;
+
+  const _CustomDictionaryDialog({required this.store, this.checker});
+
+  @override
+  State<_CustomDictionaryDialog> createState() =>
+      _CustomDictionaryDialogState();
+}
+
+class _CustomDictionaryDialogState extends State<_CustomDictionaryDialog> {
+  late List<String> _words = _load();
+
+  List<String> _load() =>
+      (widget.checker?.dictionary.toList() ??
+            Spelling.savedDictionary(widget.store).toList())
+        ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+
+  void _remove(String word) {
+    final checker = widget.checker;
+    if (checker != null) {
+      checker.removeFromDictionary(word);
+    } else {
+      final words = Spelling.savedDictionary(widget.store).toSet()
+        ..remove(word);
+      widget.store.setString(
+        Spelling.dictionaryKey,
+        jsonEncode(words.toList()),
+      );
+    }
+    setState(() => _words = _load());
+  }
+
+  Future<void> _add() async {
+    final word = await showTextInputDialog(
+      context,
+      title: 'Add Word',
+      label: 'Word',
+    );
+    final clean = word?.trim() ?? '';
+    if (clean.isEmpty || clean.contains(RegExp(r'\s'))) return;
+    final checker = widget.checker;
+    if (checker != null) {
+      checker.addToDictionary(clean);
+    } else {
+      final words = Spelling.savedDictionary(widget.store).toSet()..add(clean);
+      widget.store.setString(
+        Spelling.dictionaryKey,
+        jsonEncode(words.toList()),
+      );
+    }
+    setState(() => _words = _load());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlookDialog(
+      title: 'Custom Dictionary',
+      width: 380,
+      actions: [
+        OutlinedButton(onPressed: _add, child: const Text('Add...')),
+        ElevatedButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+      ],
+      child: SizedBox(
+        height: 260,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            border: Border.all(color: OutlookTheme.dividerColor),
+          ),
+          child: _words.isEmpty
+              ? const Center(
+                  child: Text(
+                    'No words added yet.',
+                    style: TextStyle(color: OutlookTheme.textMuted),
+                  ),
+                )
+              : ListView(
+                  children: [
+                    for (final w in _words)
+                      ListTile(
+                        dense: true,
+                        title: Text(w),
+                        trailing: IconButton(
+                          tooltip: 'Delete',
+                          icon: const Icon(Icons.close, size: 16),
+                          onPressed: () => _remove(w),
+                        ),
+                      ),
+                  ],
+                ),
+        ),
+      ),
+    );
+  }
+}
+
 class _OptionsPage extends StatelessWidget {
   const _OptionsPage();
 
@@ -662,6 +861,36 @@ class _OptionsPage extends StatelessWidget {
               ComposeScreen.htmlPreference, defaultValue: true),
           Row(
             children: [
+              const Text(
+                'Hold sent messages for',
+                style: TextStyle(fontSize: 13),
+              ),
+              const SizedBox(width: 12),
+              DropdownButton<int>(
+                value: const [0, 5, 10, 30].contains(mail.sendDelaySeconds)
+                    ? mail.sendDelaySeconds
+                    : 0,
+                isDense: true,
+                items: const [
+                  DropdownMenuItem(value: 0, child: Text('No delay')),
+                  DropdownMenuItem(value: 5, child: Text('5 seconds')),
+                  DropdownMenuItem(value: 10, child: Text('10 seconds')),
+                  DropdownMenuItem(value: 30, child: Text('30 seconds')),
+                ],
+                onChanged: (v) => mail.sendDelaySeconds = v ?? 0,
+              ),
+              const SizedBox(width: 12),
+              const Flexible(
+                child: Text(
+                  'so you can Undo sending them',
+                  style: TextStyle(fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Row(
+            children: [
               const Text('Reading Pane:', style: TextStyle(fontSize: 13)),
               const SizedBox(width: 12),
               DropdownButton<ReadingPanePosition>(
@@ -700,6 +929,8 @@ class _OptionsPage extends StatelessWidget {
               ),
             ],
           ),
+          heading('Spelling'),
+          _SpellingOptions(store: mail.store, toggle: toggle),
           heading('Send and receive'),
           CheckboxListTile(
             dense: true,

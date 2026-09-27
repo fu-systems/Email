@@ -395,6 +395,53 @@ void main() {
     store.close();
   });
 
+  test('MailProvider holds a message in the Outbox until its time', () async {
+    if (!available) return markTestSkipped('no mail server');
+    final store = DataStore.inMemory();
+    final mail = MailProvider(
+      store: store,
+      notifications: NotificationService(enabled: false),
+    );
+    store.saveAccount(bob);
+    mail.updateAccounts([bob]);
+    OutgoingMessage held(String id, String subject) => OutgoingMessage(
+      id: id,
+      accountId: bob.id,
+      to: const [EmailAddress(address: 'alice@example.com')],
+      subject: subject,
+      textBody: 'Sent after a pause',
+      createdAt: DateTime.now(),
+      sendAfter: DateTime.now().add(const Duration(seconds: 2)),
+    );
+
+    // Undo: taken back before its time, it is never sent.
+    final undone = _subject('Undone');
+    expect(await mail.send(held('undo', undone)), SendResult.scheduled);
+    expect(mail.cancelScheduled('undo')?.subject, undone);
+    expect(store.outbox, isEmpty);
+
+    final later = _subject('Held');
+    expect(await mail.send(held('held', later)), SendResult.scheduled);
+    expect(store.outbox.single.subject, later);
+    for (var i = 0; i < 60 && store.outbox.isNotEmpty; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+    expect(store.outbox, isEmpty, reason: store.outbox.firstOrNull?.lastError);
+    expect(mail.cancelScheduled('held'), isNull);
+
+    final aliceBackend = ImapBackend(alice);
+    final aliceInbox = await _inbox(aliceBackend);
+    expect(
+      await _waitForSubject(aliceBackend, aliceInbox, later),
+      hasLength(1),
+    );
+    final all = await aliceBackend.syncFolder(aliceInbox, cachedUids: const {});
+    expect(all.messages.where((m) => m.subject == undone), isEmpty);
+    await aliceBackend.disconnect();
+    mail.dispose();
+    store.close();
+  });
+
   test('Microsoft-style sign-in: XOAUTH2 for IMAP and SMTP with refresh',
       () async {
     if (!available) return markTestSkipped('no mail server');

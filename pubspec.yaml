@@ -40,13 +40,20 @@ dependencies:
   collection: ^1.18.0
   url_launcher: ^6.2.2
 
-  # Crypto for password storage
-  # Desktop notifications (org.freedesktop.Notifications over D-Bus)
+  # Desktop notifications, the system keyring and the file transfer
+  # portal (org.freedesktop.* over D-Bus)
   dbus: ^0.7.10
+  # Password encryption and OAuth PKCE
   crypto: ^3.0.7
   pointycastle: ^4.0.0
+  clock: ^1.1.3
+
+  # Formatted message editor and its HTML export
   flutter_quill: ^11.6.0
   vsc_quill_delta_to_html: ^1.0.5
+  # Files dragged onto the message window
+  desktop_drop: ^0.8.4
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

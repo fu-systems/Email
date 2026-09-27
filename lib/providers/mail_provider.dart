@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
@@ -43,7 +44,10 @@ enum MessageSort {
 enum ReadingPanePosition { right, bottom, off }
 
 /// Outcome of a send attempt.
-enum SendResult { sent, queued, failed }
+/// Outcome of [MailProvider.send]: sent now, queued in the Outbox because
+/// the server can't be reached, scheduled in the Outbox for later (undo
+/// send, delayed delivery), or failed.
+enum SendResult { sent, queued, scheduled, failed }
 
 /// State management for the Mail module: accounts, folders, messages,
 /// synchronization, sending and search. Works offline from the local cache;
@@ -105,6 +109,7 @@ class MailProvider extends ChangeNotifier {
     _workOffline = _store.getBool('workOffline');
     this.notifications.enabled =
         _store.getBool('notifications', defaultValue: true);
+    _scheduleOutbox();
   }
 
   // ─── Getters ───────────────────────────────────────────────────────
@@ -277,7 +282,9 @@ class MailProvider extends ChangeNotifier {
               htmlBody: m.htmlBody,
               preview: m.lastError != null
                   ? 'Not sent: ${m.lastError}'
-                  : MimeConverter.makePreview(m.textBody, null),
+                  : m.isScheduled(clock.now())
+                      ? 'Will be sent ${describeSendTime(m.sendAfter!)}'
+                      : MimeConverter.makePreview(m.textBody, null),
               attachments: m.attachments,
               hasAttachments: m.attachments.isNotEmpty,
               isRead: true,
@@ -1461,12 +1468,22 @@ class MailProvider extends ChangeNotifier {
 
   /// Sends [message]. When the server can't be reached the message goes to
   /// the Outbox and is sent on the next Send/Receive.
+  ///
+  /// A message with a future [OutgoingMessage.sendAfter] waits in the
+  /// Outbox and is sent when its time comes (while Look In is running, or
+  /// on the next Send/Receive after that); [cancelScheduled] takes it back.
   Future<SendResult> send(OutgoingMessage message) async {
     final account = accountById(message.accountId);
     if (account == null) {
       _error = 'No account to send from';
       _notify();
       return SendResult.failed;
+    }
+    if (message.isScheduled(clock.now())) {
+      _store.addToOutbox(message);
+      _scheduleOutbox();
+      _notify();
+      return SendResult.scheduled;
     }
     if (!_canUseNetwork(account.id)) {
       _store.addToOutbox(message.copyWith(lastError: 'Working offline'));
@@ -1642,11 +1659,18 @@ class MailProvider extends ChangeNotifier {
     return message.copyWith(draftMessageId: id);
   }
 
-  /// Attempts to send everything in the Outbox of [accountId].
+  /// Attempts to send everything in the Outbox of [accountId] except
+  /// messages scheduled for later.
   Future<void> _flushOutbox(String accountId) async {
     final account = accountById(accountId);
     if (account == null) return;
-    for (final item in _store.outbox.where((m) => m.accountId == accountId).toList()) {
+    final now = clock.now();
+    final items = _store.outbox
+        .where((m) => m.accountId == accountId && !m.isScheduled(now))
+        .toList();
+    for (final item in items) {
+      if (_openOutbox.contains(item.id)) continue;
+      if (!_sendingOutbox.add(item.id)) continue;
       try {
         await _deliver(account, item);
         _store.removeFromOutbox(item.id);
@@ -1654,9 +1678,111 @@ class MailProvider extends ChangeNotifier {
         rethrow;
       } catch (e) {
         _store.addToOutbox(item.copyWith(lastError: e.toString()));
+      } finally {
+        _sendingOutbox.remove(item.id);
       }
       _notify();
     }
+  }
+
+  /// Outbox items being sent right now (they can't be taken back).
+  final Set<String> _sendingOutbox = {};
+
+  /// Outbox items open in a message window; like Outlook, they aren't sent
+  /// while open.
+  final Set<String> _openOutbox = {};
+  Timer? _outboxTimer;
+
+  /// Marks an Outbox item as open in a message window, or closed again
+  /// (then it goes out if its time has come).
+  void setOutboxItemOpen(String id, bool open) {
+    if (open) {
+      _openOutbox.add(id);
+      return;
+    }
+    if (!_openOutbox.remove(id) || _disposed) return;
+    // Called as the window closes (the widget tree is locked): send right
+    // after that.
+    if (_store.outbox.any((m) => m.id == id)) {
+      scheduleMicrotask(() => unawaited(_sendDue()));
+    }
+  }
+
+  /// Wakes up when the next scheduled Outbox message is due.
+  void _scheduleOutbox() {
+    _outboxTimer?.cancel();
+    _outboxTimer = null;
+    final now = clock.now();
+    DateTime? next;
+    for (final m in _store.outbox) {
+      final at = m.sendAfter;
+      if (at == null || !at.isAfter(now)) continue;
+      if (next == null || at.isBefore(next)) next = at;
+    }
+    if (next == null || _disposed) return;
+    _outboxTimer = Timer(
+      next.difference(now) + const Duration(milliseconds: 20),
+      () => unawaited(_sendDue()),
+    );
+  }
+
+  /// Sends the scheduled messages whose time has come. Those that can't be
+  /// sent stay in the Outbox for the next Send/Receive.
+  Future<void> _sendDue() async {
+    final now = clock.now();
+    final due = _store.outbox
+        .where((m) =>
+            m.sendAfter != null &&
+            !m.isScheduled(now) &&
+            m.lastError == null &&
+            !_sendingOutbox.contains(m.id) &&
+            !_openOutbox.contains(m.id))
+        .toList();
+    for (final item in due) {
+      if (_disposed) return;
+      final account = accountById(item.accountId);
+      if (account == null) continue;
+      if (!_canUseNetwork(account.id)) {
+        _store.addToOutbox(item.copyWith(lastError: 'Working offline'));
+        _notify();
+        continue;
+      }
+      _sendingOutbox.add(item.id);
+      try {
+        await _deliver(account, item);
+        _store.removeFromOutbox(item.id);
+        _setOnline(account.id);
+      } on MailConnectionException catch (e) {
+        _store.addToOutbox(item.copyWith(lastError: e.message));
+        _handleAccountError(account.id, e);
+      } catch (e) {
+        _store.addToOutbox(item.copyWith(lastError: e.toString()));
+      } finally {
+        _sendingOutbox.remove(item.id);
+      }
+      _notify();
+    }
+    _scheduleOutbox();
+  }
+
+  /// Takes a message that waits in the Outbox back (Undo after sending).
+  /// Returns null when it is already being sent or is gone.
+  OutgoingMessage? cancelScheduled(String id) {
+    if (_sendingOutbox.contains(id)) return null;
+    final item = _store.outbox.where((m) => m.id == id).firstOrNull;
+    if (item == null) return null;
+    _store.removeFromOutbox(id);
+    _scheduleOutbox();
+    _notify();
+    return item;
+  }
+
+  /// Seconds a sent message waits in the Outbox, so it can be undone.
+  static const sendDelayKey = 'sendDelaySeconds';
+  int get sendDelaySeconds => _store.getInt(sendDelayKey);
+  set sendDelaySeconds(int value) {
+    _store.setInt(sendDelayKey, value);
+    _notify();
   }
 
   /// Returns the Outbox entry behind an Outbox list item.
@@ -1668,6 +1794,7 @@ class MailProvider extends ChangeNotifier {
 
   void removeFromOutbox(String id) {
     _store.removeFromOutbox(id);
+    _scheduleOutbox();
     _notify();
   }
 
@@ -1917,6 +2044,7 @@ class MailProvider extends ChangeNotifier {
     _disposed = true;
     _accountSource?.removeListener(_onAccountsChanged);
     _syncTimer?.cancel();
+    _outboxTimer?.cancel();
     for (final backend in _imap.values) {
       unawaited(backend.disconnect());
     }

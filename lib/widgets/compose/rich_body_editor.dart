@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_quill/flutter_quill.dart';
 
 import '../../theme/outlook_theme.dart';
+import 'spelling.dart';
 
 /// Base size of message text: 11 pt, like Outlook.
 const double composeFontSize = 15;
@@ -36,6 +37,12 @@ class RichBodyEditor extends StatelessWidget {
   /// editor would otherwise take for itself.
   final Map<SingleActivator, VoidCallback> shortcuts;
 
+  /// Underlines misspelled words and offers suggestions on right-click.
+  final SpellingHighlighter? spelling;
+
+  /// Gives access to the editor's layout (e.g. to place a dropped picture).
+  final GlobalKey<EditorState>? editorKey;
+
   const RichBodyEditor({
     super.key,
     required this.controller,
@@ -47,6 +54,8 @@ class RichBodyEditor extends StatelessWidget {
     this.minHeight,
     this.padding = EdgeInsets.zero,
     this.shortcuts = const {},
+    this.spelling,
+    this.editorKey,
   });
 
   static DefaultStyles styles() {
@@ -67,6 +76,16 @@ class RichBodyEditor extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final spelling = this.spelling;
+    if (spelling == null) return _editor(null);
+    // Rebuilds the text (and its underlines) after each check.
+    return ListenableBuilder(
+      listenable: spelling,
+      builder: (context, _) => _editor(spelling),
+    );
+  }
+
+  Widget _editor(SpellingHighlighter? spelling) {
     return QuillEditor(
       controller: controller,
       focusNode: focusNode,
@@ -82,6 +101,9 @@ class RichBodyEditor extends StatelessWidget {
         embedBuilders: const [ImageEmbedBuilder()],
         unknownEmbedBuilder: const _UnknownEmbedBuilder(),
         textCapitalization: TextCapitalization.sentences,
+        editorKey: editorKey,
+        textSpanBuilder: spelling?.buildSpan ?? defaultSpanBuilder,
+        contextMenuBuilder: spelling?.contextMenu,
         customShortcuts: {
           for (final key in shortcuts.keys) key: _CallbackIntent(key),
         },

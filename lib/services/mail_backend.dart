@@ -185,13 +185,18 @@ class ImapBackend {
     } catch (_) {}
   }
 
-  Future<void> _closeQuietly() async {
+  /// Logs out and closes the connection. A connection that is already
+  /// closed (or broken, with [graceful] false) is just dropped: waiting for
+  /// an answer to LOGOUT there only delays the reconnect.
+  Future<void> _closeQuietly({bool graceful = true}) async {
     final client = _client;
     _client = null;
     if (client == null) return;
-    try {
-      await client.logout().timeout(const Duration(seconds: 5));
-    } catch (_) {}
+    if (graceful && client.isConnected && client.isLoggedIn) {
+      try {
+        await client.logout().timeout(const Duration(seconds: 3));
+      } catch (_) {}
+    }
     try {
       await client.disconnect();
     } catch (_) {}
@@ -211,6 +216,7 @@ class ImapBackend {
           if (e is enough.ImapException) throw Exception(_describe(e));
           rethrow;
         }
+        await _closeQuietly(graceful: false);
         await _connect();
         try {
           return await op(_client!);
