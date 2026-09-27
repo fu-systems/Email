@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Look In
+GenericName=Email Client
+Comment=Read and send email, manage your calendar and contacts
+Exec=look_in
+Icon=mail-client
+Terminal=false
+Categories=Network;Email;Calendar;ContactManagement;Office;
+Keywords=email;mail;imap;pop3;smtp;calendar;contacts;outlook;
+StartupWMClass=systems.fu.look_in
+StartupNotify=true

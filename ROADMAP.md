@@ -1,7 +1,7 @@
 # Look In - Project Roadmap
 
 > **Linux Desktop Email Client** built with Flutter, inspired by Microsoft Outlook 2013.
-> Last updated: 2026-02-24
+> Last updated: 2026-09-27
 
 ---
 
@@ -10,11 +10,12 @@
 ```
 Phase 1: Core Architecture          [##########] 100%  COMPLETE
 Phase 2: Email Module               [##########] 100%  COMPLETE
-Phase 3: Calendar & Contacts Views  [##########] 100%  COMPLETE  <-- current
+Phase 3: Calendar & Contacts Views  [##########] 100%  COMPLETE
 Phase 4: Ribbon & UI Wiring         [##########] 100%  COMPLETE
-Phase 5: Linux Platform & Build     [----------]   0%  PLANNED
-Phase 6: Persistence & Offline      [#---------]  10%  PLANNED
-Phase 7: Advanced Features          [----------]   0%  FUTURE
+Phase 5: Linux Platform & Build     [##########] 100%  COMPLETE
+Phase 6: Persistence & Offline      [##########] 100%  COMPLETE
+Phase 7: Advanced Features          [##########] 100%  COMPLETE
+Phase 8: Next                       [----------]   0%  PLANNED  <-- next
 ```
 
 ---
@@ -37,8 +38,8 @@ Foundational layers: project setup, data models, state management, services, and
 | Mail state management (folders, messages) | `lib/providers/mail_provider.dart` | Done |
 | Calendar state management (events, nav) | `lib/providers/calendar_provider.dart` | Done |
 | Contacts state management (search, filter) | `lib/providers/contacts_provider.dart` | Done |
-| IMAP/SMTP email service (enough_mail) | `lib/services/email_service.dart` | Done |
-| In-memory data cache | `lib/services/database_service.dart` | Done |
+| IMAP/SMTP email service (enough_mail) | `lib/services/mail_backend.dart` (was `email_service.dart`) | Done |
+| In-memory data cache | `lib/services/data_store.dart` (now backed by SQLite) | Done |
 
 ---
 
@@ -85,68 +86,91 @@ Connect all ribbon buttons and UI callbacks to their provider actions.
 | Contacts ribbon: New Contact | `home_screen.dart` | Done |
 | Contacts ribbon: Delete contact | `home_screen.dart` | Done |
 | Mail ribbon: Move to folder dialog | `home_screen.dart` | Done |
-| Mail ribbon: New Folder dialog (placeholder) | `home_screen.dart` | Done |
-| Mail ribbon: Rules (placeholder snackbar) | `home_screen.dart` | Done |
+| Mail ribbon: New Folder dialog | `home_screen.dart`, `mail_dialogs.dart` | Done |
+| Mail ribbon: Rules (create rule, manage rules, run now) | `home_screen.dart`, `mail_dialogs.dart` | Done |
 | View ribbon: Reading Pane toggle | `home_screen.dart`, `mail_provider.dart`, `mail_view.dart` | Done |
 | View ribbon: Folder Pane toggle | `home_screen.dart`, `mail_provider.dart`, `mail_view.dart` | Done |
 | Navigation bar overflow popup menu | `navigation_bar.dart` | Done |
-| File tab: Account management backstage view | `home_screen.dart` | Pending |
+| File tab: backstage (Info, Open & Export, Options, About, Exit) | `lib/screens/backstage/backstage_view.dart` | Done |
+| Send/Receive, Folder and View ribbon tabs | `home_screen.dart` | Done |
 
 ---
 
-## Phase 5: Linux Platform & Build — PLANNED
-
-Generate Flutter Linux desktop runner files so the app can compile and run natively.
+## Phase 5: Linux Platform & Build — COMPLETE
 
 | Task | File(s) | Status |
 |------|---------|--------|
-| CMake top-level config | `linux/CMakeLists.txt` | Pending |
-| GTK application entry point | `linux/main.cc` | Pending |
-| Flutter GTK embedder | `linux/my_application.h`, `linux/my_application.cc` | Pending |
-| Flutter plugin integration | `linux/flutter/CMakeLists.txt` | Pending |
-| Verify `flutter build linux` succeeds | — | Pending |
-| Desktop window sizing (1200x800 default) | `linux/my_application.cc` | Pending |
+| CMake top-level config | `linux/CMakeLists.txt` | Done |
+| GTK application entry point | `linux/runner/main.cc` | Done |
+| Flutter GTK embedder (title, 1200x800 default, 960x600 minimum, icon) | `linux/runner/my_application.cc` | Done |
+| Flutter plugin integration | `linux/flutter/CMakeLists.txt` | Done |
+| `flutter build linux --release` succeeds | — | Done |
+| Desktop entry and install script | `packaging/` | Done |
 
 ---
 
-## Phase 6: Persistence & Offline — PLANNED
-
-Replace in-memory DataCache with SQLite for data that survives restarts.
+## Phase 6: Persistence & Offline — COMPLETE
 
 | Task | File(s) | Status |
 |------|---------|--------|
-| Define Drift database tables (accounts, messages, contacts, events) | `database_service.dart` | Pending |
-| Migrate AccountProvider from SharedPreferences to Drift | `account_provider.dart` | Pending |
-| Cache fetched messages locally | `mail_provider.dart`, `database_service.dart` | Pending |
-| Persist calendar events to SQLite | `calendar_provider.dart` | Pending |
-| Persist contacts to SQLite | `contacts_provider.dart` | Pending |
-| Secure credential storage (encrypt package) | `account_provider.dart` | Pending |
-| Offline mode indicator in status bar | `status_bar.dart` | Pending |
+| SQLite schema with migrations (accounts, folders, messages, contacts, groups, events, rules, outbox, settings) | `database_service.dart` | Done |
+| Migrate accounts and data from SharedPreferences | `data_store.dart` | Done |
+| Cache folders, messages, bodies and raw MIME locally | `mail_provider.dart`, `data_store.dart` | Done |
+| Persist calendar events | `calendar_provider.dart` | Done |
+| Persist contacts and contact groups | `contacts_provider.dart` | Done |
+| Encrypted credential storage (AES-256-GCM, 0600 key file) | `credential_store.dart` | Done |
+| Offline indicator, Work Offline, pending changes and Outbox in the status bar | `status_bar.dart` | Done |
+| Offline queue for flags, moves and deletes; Outbox for mail sent offline | `mail_provider.dart` | Done |
+
+Deviation: the plan named Drift. The plain `sqlite3` package was used instead
+(JSON documents plus indexed columns), which avoids code generation and bundles
+SQLite through its build hook.
 
 ---
 
-## Phase 7: Advanced Features — FUTURE
-
-Feature parity with Outlook 2013 and beyond.
+## Phase 7: Advanced Features — COMPLETE
 
 | Task | Priority | Status |
 |------|----------|--------|
-| HTML email rendering (flutter_html) | High | Pending |
-| Attachment download/save (file_picker) | High | Pending |
-| Keyboard shortcuts (Ctrl+N, Ctrl+R, Delete) | High | Pending |
-| Right-click context menus | Medium | Pending |
-| Drag-and-drop message moving | Medium | Pending |
-| Email signature editor | Medium | Pending |
-| POP3 protocol support | Medium | Pending |
-| Email rules and filters | Medium | Pending |
-| Contact groups / distribution lists | Medium | Pending |
-| Calendar invites (iCal parsing) | Medium | Pending |
-| Recurring event expansion | Medium | Pending |
-| Multi-account folder tree | Medium | Pending |
-| Search across all folders | Medium | Pending |
-| Print support | Low | Pending |
-| Import/export (CSV, ICS) | Low | Pending |
-| System tray & desktop notifications | Low | Pending |
+| HTML email rendering (flutter_html) with sanitizing and blocked remote pictures | High | Done |
+| Attachment open / save / save all (portal, zenity, kdialog or built-in dialog) | High | Done |
+| Keyboard shortcuts (Outlook set: Ctrl+N/R/F, Delete, Ctrl+Q/U, F9, Ctrl+E …) | High | Done |
+| Right-click context menus (messages, folders, contacts, events) | Medium | Done |
+| Drag-and-drop message moving | Medium | Done |
+| Email signature editor (per account) | Medium | Done |
+| POP3 protocol support (leave on server option) | Medium | Done |
+| Email rules and filters | Medium | Done |
+| Contact groups / distribution lists | Medium | Done |
+| Calendar invites (iCal parsing, VTIMEZONE, accept / tentative / decline replies) | Medium | Done |
+| Recurring event expansion (DST-safe, until / count / exceptions) | Medium | Done |
+| Multi-account folder tree with Favorites | Medium | Done |
+| Search across all folders, plus server-side search | Medium | Done |
+| Print support (messages, contacts, agenda) | Low | Done |
+| Import/export (CSV and vCard contacts, ICS calendar) | Low | Done |
+| Desktop notifications (new mail, reminders) | Low | Done |
+| System tray icon | Low | Not done (see Phase 8) |
+
+Deviations:
+- Printing renders a print-ready HTML page and opens it in the browser. The
+  `printing` plugin needs to download PDFium while building, which breaks
+  offline and sandboxed builds.
+- Notifications go straight to the freedesktop D-Bus service (`dbus`), with no
+  extra native plugin.
+
+---
+
+## Phase 8: Next — PLANNED
+
+| Task | Notes |
+|------|-------|
+| OAuth2 sign-in (Gmail, Outlook.com / Microsoft 365) | Microsoft no longer accepts passwords over IMAP |
+| Secret Service keyring for passwords | GNOME Keyring / KWallet instead of the local key file |
+| CalDAV / CardDAV sync | Calendar and contacts are local-only today |
+| Rich-text compose editor | Compose is plain text with a generated HTML part |
+| IMAP IDLE push | Sync currently polls on each account's interval |
+| System tray icon and single-instance handling (`mailto:` links) | |
+| Flatpak / AppImage packaging | |
+| Conversation (thread) view | |
 
 ---
 
@@ -154,59 +178,69 @@ Feature parity with Outlook 2013 and beyond.
 
 ```
 lib/
-├── main.dart                          # Entry point
+├── main.dart                          # Entry point, opens the data store
 ├── app.dart                           # MaterialApp + Provider setup + routing
-├── theme/
-│   └── outlook_theme.dart             # Colors, text styles, ThemeData
+├── theme/outlook_theme.dart           # Colors, text styles, ThemeData
 ├── models/
-│   ├── email_account.dart             # Account + provider auto-detection
-│   ├── email_message.dart             # Message + EmailAddress + Attachment
-│   ├── folder.dart                    # MailFolder + type detection
-│   ├── contact.dart                   # Contact + email/phone/address
-│   └── calendar_event.dart            # Event + category + recurrence
+│   ├── email_account.dart             # Account, protocols, provider presets
+│   ├── email_message.dart             # Message, EmailAddress, Attachment
+│   ├── folder.dart                    # MailFolder, hierarchy, special types
+│   ├── contact.dart                   # Contact, ContactGroup
+│   ├── calendar_event.dart            # Event, recurrence expansion, reminders
+│   ├── mail_rule.dart                 # Rules and their evaluation
+│   └── outgoing_message.dart          # Outbox / drafts
 ├── providers/
-│   ├── navigation_provider.dart       # Section switching
-│   ├── account_provider.dart          # Account CRUD + persistence
-│   ├── mail_provider.dart             # Mail ops (connect, fetch, send, search)
-│   ├── calendar_provider.dart         # Calendar navigation + event CRUD
-│   └── contacts_provider.dart         # Contact list, search, filter, CRUD
+│   ├── navigation_provider.dart       # Mail / Calendar / People
+│   ├── account_provider.dart          # Account CRUD, default account
+│   ├── mail_provider.dart             # Sync, offline queue, send, search, rules
+│   ├── calendar_provider.dart         # Views, event CRUD, reminders
+│   └── contacts_provider.dart         # Contacts, groups, suggestions
 ├── services/
-│   ├── email_service.dart             # IMAP/SMTP via enough_mail
-│   └── database_service.dart          # DataCache (in-memory) + future Drift
+│   ├── database_service.dart          # SQLite schema and queries
+│   ├── data_store.dart                # Cached, write-through data store
+│   ├── credential_store.dart          # AES-GCM password encryption
+│   ├── mail_backend.dart              # IMAP / POP3 / SMTP
+│   ├── mime_converter.dart            # MIME parse / build
+│   ├── ical_service.dart              # iCalendar parse / generate / reply
+│   ├── contacts_io.dart               # CSV and vCard
+│   ├── html_sanitizer.dart            # Safe HTML, quoting
+│   ├── autoconfig_service.dart        # ISPDB / autoconfig / MX
+│   ├── notification_service.dart      # D-Bus notifications
+│   ├── file_dialogs.dart              # File pickers and opening files
+│   ├── print_service.dart             # Printable HTML
+│   └── app_log.dart                   # Error log file
 ├── screens/
-│   ├── home_screen.dart               # Main layout + ribbon configurations
-│   ├── mail/
-│   │   ├── mail_view.dart             # Three-pane mail interface
-│   │   └── compose_screen.dart        # Compose / reply / forward
-│   ├── calendar/
-│   │   └── calendar_view.dart         # Month grid + event list + editor
-│   ├── contacts/
-│   │   └── contacts_view.dart         # Contact list + detail + editor
-│   └── settings/
-│       └── account_setup_screen.dart  # Account wizard (first-run + settings)
+│   ├── home_screen.dart               # Layout, ribbons, shortcuts
+│   ├── backstage/backstage_view.dart  # File tab
+│   ├── mail/                          # Mail view, compose, dialogs, address book
+│   ├── calendar/                      # Day/week/month grids, editor, import/export
+│   ├── contacts/                      # List, details, editors, import/export
+│   └── settings/account_setup_screen.dart  # Account wizard
 └── widgets/
-    ├── ribbon/
-    │   └── ribbon_toolbar.dart        # Outlook ribbon component
+    ├── ribbon/ribbon_toolbar.dart     # Outlook ribbon component
+    ├── common.dart                    # Dialogs, menus, shared widgets
     ├── folder_pane.dart               # Folder tree sidebar
-    ├── message_list.dart              # Message list with previews
+    ├── message_list.dart              # Message list with grouping
     ├── reading_pane.dart              # Message reader
-    ├── navigation_bar.dart            # Bottom nav (Mail/Calendar/People)
-    └── status_bar.dart                # Bottom status bar
+    ├── navigation_bar.dart            # Mail / Calendar / People bar
+    └── status_bar.dart                # Status and connection state
 ```
 
 ---
 
 ## Dependencies
 
-| Package | Purpose | Used |
-|---------|---------|------|
-| `provider` | State management | Yes |
-| `enough_mail` | IMAP/SMTP protocol | Yes |
-| `shared_preferences` | Account persistence | Yes |
-| `uuid` | Unique ID generation | Yes |
-| `intl` | Date/number formatting | Yes |
-| `table_calendar` | Calendar month grid | Yes |
-| `flutter_html` | HTML email rendering | Not yet |
-| `drift` + `sqlite3_flutter_libs` | Local database | Not yet |
-| `file_picker` | Attachment save dialog | Not yet |
-| `encrypt` | Credential encryption | Not yet |
+| Package | Purpose |
+|---------|---------|
+| `provider` | State management |
+| `enough_mail` | IMAP / POP3 / SMTP and MIME |
+| `sqlite3` | Local database (SQLite bundled by its build hook) |
+| `encrypt` | AES-GCM password encryption |
+| `flutter_html`, `flutter_html_table` | HTML email rendering |
+| `html` | HTML sanitizing (pinned below 0.15.7 for flutter_html 3.0.0) |
+| `file_picker` | File dialogs through the XDG portal |
+| `dbus` | Desktop notifications |
+| `url_launcher` | Opening links, files and print pages |
+| `path_provider`, `path` | Data directory |
+| `shared_preferences` | Only to migrate data from older versions |
+| `intl`, `uuid`, `collection` | Formatting, ids, utilities |
