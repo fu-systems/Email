@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../models/email_account.dart';
+import 'dns_mx.dart';
 
 /// Server settings discovered for an email address.
 class DiscoveredSettings {
@@ -83,10 +84,17 @@ class AutoconfigService {
     }
   }
 
-  /// Registrable domain of the first MX host (via `dig` or `host`), e.g.
-  /// `aspmx.l.google.com` → `google.com`.
-  static Future<String?> _mxBaseDomain(String domain) async {
-    String? output;
+  /// MX hosts of [domain], most preferred first. Uses Look In's own DNS
+  /// client, falling back to `dig`/`host`.
+  static Future<List<String>> mxHosts(String domain) async {
+    try {
+      final records = await DnsMx.lookup(domain);
+      if (records.isNotEmpty) return records.map((r) => r.host).toList();
+    } catch (_) {}
+    return _mxHostsFromTools(domain);
+  }
+
+  static Future<List<String>> _mxHostsFromTools(String domain) async {
     for (final cmd in [
       ['dig', '+short', 'MX', domain],
       ['host', '-t', 'MX', domain],
@@ -94,18 +102,26 @@ class AutoconfigService {
       try {
         final result = await Process.run(cmd.first, cmd.sublist(1))
             .timeout(const Duration(seconds: 4));
-        if (result.exitCode == 0 && (result.stdout as String).trim().isNotEmpty) {
-          output = result.stdout as String;
-          break;
-        }
+        final output = (result.stdout as String).toLowerCase();
+        if (result.exitCode != 0 || output.trim().isEmpty) continue;
+        final hosts = [
+          for (final m in RegExp(r'(\d+)\s+([a-z0-9-]+(?:\.[a-z0-9-]+)+)\.?\s*$',
+                  multiLine: true)
+              .allMatches(output))
+            (int.parse(m.group(1)!), m.group(2)!),
+        ]..sort((a, b) => a.$1.compareTo(b.$1));
+        if (hosts.isNotEmpty) return [for (final h in hosts) h.$2];
       } catch (_) {}
     }
-    if (output == null) return null;
-    final host = RegExp(r'([a-z0-9-]+(\.[a-z0-9-]+)+)\.?\s*$', multiLine: true)
-        .firstMatch(output.toLowerCase())
-        ?.group(1);
-    if (host == null) return null;
-    final parts = host.split('.');
+    return const [];
+  }
+
+  /// Registrable domain of the first MX host, e.g. `aspmx.l.google.com`
+  /// → `google.com`.
+  static Future<String?> _mxBaseDomain(String domain) async {
+    final hosts = await mxHosts(domain);
+    if (hosts.isEmpty) return null;
+    final parts = hosts.first.split('.');
     if (parts.length < 2) return null;
     return parts.sublist(parts.length - 2).join('.');
   }

@@ -738,6 +738,34 @@ class SmtpSender {
     final domain = account.emailAddress.contains('@')
         ? account.emailAddress.split('@').last
         : 'localhost';
+    final client = await _open(account, domain);
+    try {
+      await client.sendMessage(
+        message,
+        from: enough.MailAddress(account.displayName, account.emailAddress),
+        recipients: recipients
+            .map((r) => enough.MailAddress(r.displayName, r.address))
+            .toList(),
+        use8BitEncoding: client.serverInfo.supports8BitMime,
+      );
+    } catch (e) {
+      if (_isConnectionError(e)) {
+        throw MailConnectionException(_describe(e), e);
+      }
+      throw Exception('Sending failed: ${_describe(e)}');
+    } finally {
+      await _close(client);
+    }
+  }
+
+  /// Verifies the SMTP settings (connect, TLS, login) without sending.
+  static Future<void> checkConnection(EmailAccount account) async {
+    await _close(await _open(account, 'localhost', errorPrefix: 'SMTP: '));
+  }
+
+  /// Connects, secures and logs in; the caller closes the client.
+  static Future<enough.SmtpClient> _open(EmailAccount account, String domain,
+      {String errorPrefix = ''}) async {
     final client = enough.SmtpClient(
       domain,
       onBadCertificate: _certificateHandler(account),
@@ -753,96 +781,64 @@ class SmtpSender {
         await client.startTls();
       }
     } catch (e) {
-      try {
-        await client.disconnect();
-      } catch (_) {}
-      throw MailConnectionException(_describe(e), e);
+      // No session to QUIT: sending a command would wait forever.
+      await _close(client, quit: false);
+      throw MailConnectionException('$errorPrefix${_describe(e)}', e);
     }
-
     try {
-      final mechanisms = client.serverInfo.authMechanisms;
-      if (account.username.isNotEmpty && mechanisms.isNotEmpty) {
-        final mechanism = mechanisms.contains(enough.AuthMechanism.plain)
-            ? enough.AuthMechanism.plain
-            : mechanisms.contains(enough.AuthMechanism.login)
-                ? enough.AuthMechanism.login
-                : mechanisms.first;
-        try {
-          await client.authenticate(
-              account.username, account.password, mechanism);
-        } on enough.SmtpException catch (e) {
-          throw MailAuthenticationException(
-              'SMTP login failed: ${e.message ?? e.toString()}');
-        }
-      }
-      await client.sendMessage(
-        message,
-        from: enough.MailAddress(account.displayName, account.emailAddress),
-        recipients: recipients
-            .map((r) => enough.MailAddress(r.displayName, r.address))
-            .toList(),
-        use8BitEncoding: client.serverInfo.supports8BitMime,
-      );
-    } on MailAuthenticationException {
-      rethrow;
+      await _authenticate(client, account);
     } catch (e) {
-      if (_isConnectionError(e)) {
-        throw MailConnectionException(_describe(e), e);
+      await _close(client);
+      if (e is! MailAuthenticationException && _isConnectionError(e)) {
+        throw MailConnectionException('$errorPrefix${_describe(e)}', e);
       }
-      throw Exception('Sending failed: ${_describe(e)}');
-    } finally {
-      try {
-        await client.quit();
-      } catch (_) {}
-      try {
-        await client.disconnect();
-      } catch (_) {}
+      rethrow;
+    }
+    return client;
+  }
+
+  static Future<void> _authenticate(
+      enough.SmtpClient client, EmailAccount account) async {
+    final mechanisms = client.serverInfo.authMechanisms;
+    if (account.username.isEmpty || mechanisms.isEmpty) return;
+    final mechanism = passwordMechanism(mechanisms);
+    if (mechanism == null) {
+      throw const MailAuthenticationException(
+          'SMTP login failed: the server only accepts sign-in methods Look '
+          'In does not support with a password.');
+    }
+    try {
+      await client.authenticate(account.username, account.password, mechanism);
+    } on enough.SmtpException catch (e) {
+      throw MailAuthenticationException(
+          'SMTP login failed: ${e.message ?? e.toString()}');
     }
   }
 
-  /// Verifies the SMTP settings (connect, TLS, login) without sending.
-  static Future<void> checkConnection(EmailAccount account) async {
-    final client = enough.SmtpClient(
-      'localhost',
-      onBadCertificate: _certificateHandler(account),
-    );
-    try {
-      await client.connectToServer(
-        account.smtpHost,
-        account.smtpPort,
-        isSecure: account.smtpSecurity == ConnectionSecurity.ssl,
-      );
-      await client.ehlo();
-      if (account.smtpSecurity == ConnectionSecurity.starttls) {
-        await client.startTls();
-      }
-    } catch (e) {
-      throw MailConnectionException('SMTP: ${_describe(e)}', e);
+  /// The mechanism to send a password with: PLAIN, then LOGIN, then
+  /// CRAM-MD5. Never XOAUTH2, which expects a token, not a password.
+  static enough.AuthMechanism? passwordMechanism(
+      List<enough.AuthMechanism> offered) {
+    for (final m in const [
+      enough.AuthMechanism.plain,
+      enough.AuthMechanism.login,
+      enough.AuthMechanism.cramMd5,
+    ]) {
+      if (offered.contains(m)) return m;
     }
-    try {
-      final mechanisms = client.serverInfo.authMechanisms;
-      if (account.username.isNotEmpty && mechanisms.isNotEmpty) {
-        final mechanism = mechanisms.contains(enough.AuthMechanism.plain)
-            ? enough.AuthMechanism.plain
-            : mechanisms.contains(enough.AuthMechanism.login)
-                ? enough.AuthMechanism.login
-                : mechanisms.first;
-        try {
-          await client.authenticate(
-              account.username, account.password, mechanism);
-        } on enough.SmtpException catch (e) {
-          throw MailAuthenticationException(
-              'SMTP login failed: ${e.message ?? e.toString()}');
-        }
-      }
-    } finally {
+    return null;
+  }
+
+  static Future<void> _close(enough.SmtpClient client,
+      {bool quit = true}) async {
+    if (quit) {
       try {
-        await client.quit();
-      } catch (_) {}
-      try {
-        await client.disconnect();
+        await client.quit().timeout(const Duration(seconds: 5));
       } catch (_) {}
     }
+    try {
+      await client.disconnect();
+    } catch (_) {}
   }
 }
 

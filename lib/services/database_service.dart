@@ -13,7 +13,7 @@ class AppDatabase {
   final Database _db;
 
   /// Current schema version, stored in `PRAGMA user_version`.
-  static const int schemaVersion = 1;
+  static const int schemaVersion = 2;
 
   AppDatabase._(this._db) {
     _migrate();
@@ -97,6 +97,20 @@ class AppDatabase {
         );
       ''');
     }
+    if (version < 2) {
+      // Secrets move out of the accounts table into a key/value table that
+      // also holds sign-in tokens. Values keep their encryption.
+      _db.execute('''
+        CREATE TABLE IF NOT EXISTS secrets (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+        INSERT OR IGNORE INTO secrets (key, value)
+          SELECT 'password:' || id, secret FROM accounts
+          WHERE secret IS NOT NULL AND secret != '';
+        UPDATE accounts SET secret = NULL;
+      ''');
+    }
     if (version != schemaVersion) _db.userVersion = schemaVersion;
   }
 
@@ -123,26 +137,43 @@ class AppDatabase {
   // ─── Accounts ──────────────────────────────────────────────────────
 
   /// Returns accounts as (map without password, encrypted secret).
-  List<({Map<String, dynamic> data, String? secret})> loadAccounts() {
+  /// Account documents (without secrets) in display order.
+  List<Map<String, dynamic>> loadAccounts() {
     return _db
-        .select('SELECT data, secret FROM accounts ORDER BY sort_order, rowid')
-        .map((r) => (data: _decode(r['data']), secret: r['secret'] as String?))
+        .select('SELECT data FROM accounts ORDER BY sort_order, rowid')
+        .map((r) => _decode(r['data']))
         .toList();
   }
 
   void upsertAccount(
     String id,
-    Map<String, dynamic> data,
-    String? secret, {
+    Map<String, dynamic> data, {
     int sortOrder = 0,
   }) {
     _db.execute(
-      'INSERT INTO accounts (id, sort_order, data, secret) VALUES (?, ?, ?, ?) '
+      'INSERT INTO accounts (id, sort_order, data) VALUES (?, ?, ?) '
       'ON CONFLICT(id) DO UPDATE SET data = excluded.data, '
-      'secret = excluded.secret, sort_order = excluded.sort_order',
-      [id, sortOrder, jsonEncode(data), secret],
+      'sort_order = excluded.sort_order',
+      [id, sortOrder, jsonEncode(data)],
     );
   }
+
+  // ─── Secrets ───────────────────────────────────────────────────────
+
+  /// Encrypted secrets by key (see FileSecretStore).
+  Map<String, String> loadSecrets() => {
+        for (final r in _db.select('SELECT key, value FROM secrets'))
+          r['key'] as String: r['value'] as String,
+      };
+
+  void upsertSecret(String key, String value) => _db.execute(
+        'INSERT INTO secrets (key, value) VALUES (?, ?) '
+        'ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+        [key, value],
+      );
+
+  void deleteSecret(String key) =>
+      _db.execute('DELETE FROM secrets WHERE key = ?', [key]);
 
   /// Deletes an account and everything that belongs to it.
   void deleteAccount(String id) {

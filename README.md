@@ -130,14 +130,18 @@ Everything is stored in `~/.local/share/systems.fu.look_in` (or `$XDG_DATA_HOME/
 | File | Contents |
 |---|---|
 | `look_in.db` | SQLite database: accounts, folders, cached messages and attachments, contacts, calendar, rules, Outbox and settings |
-| `master.key` | Random 256-bit key used to encrypt account passwords (mode 0600) |
+| `master.key` | Random 256-bit key that encrypts passwords and sign-in tokens when they aren't in the system keyring (mode 0600) |
 | `look_in.log` | Uncaught errors, for troubleshooting (truncated at 1 MB) |
 
 Back up the whole folder to keep everything, including the key. Removing an account (**File → Info → Remove Account**) also deletes its cached mail and unsent Outbox messages from this computer; the mail on the server is not touched.
 
 ### Password storage and threat model
 
-Passwords are encrypted with AES-256-GCM. The key lives in `master.key`, next to the database and readable only by you, so a copied or synced `look_in.db` alone doesn't reveal them. This does **not** protect against malware or anyone who can read your home directory, since the key is stored alongside the data. Look In does not yet use the Secret Service keyring (GNOME Keyring or KWallet). For stronger protection, use full-disk or home-directory encryption.
+Passwords and sign-in tokens go to the **system keyring** (GNOME Keyring, KWallet, KeePassXC or any other Secret Service provider) when one is running on a new installation. You can switch either way in **File → Options → Security**; switching moves the existing secrets. The keyring is locked with your login password and unlocks when you sign in to your desktop.
+
+Without a keyring, secrets are encrypted with AES-256-GCM in the database. The key lives in `master.key`, next to the database and readable only by you, so a copied or synced `look_in.db` alone doesn't reveal them. That does **not** protect against malware or anyone who can read your home directory, since the key is stored alongside the data.
+
+In both cases, anything running as your user can ask for the secrets, as with every desktop mail client. Full-disk or home-directory encryption protects them while the computer is off.
 
 Certificate checks are on by default. **Accept invalid certificates** is a per-account option meant only for self-hosted servers you trust.
 
@@ -152,13 +156,15 @@ lib/
   services/
     database_service.dart      SQLite schema, migrations and queries
     data_store.dart            In-memory caches written through to SQLite
-    credential_store.dart      AES-GCM password encryption
+    secret_store.dart          System keyring (Secret Service) or encrypted file
+    credential_store.dart      AES-GCM encryption for the file store
     mail_backend.dart          IMAP / POP3 / SMTP (enough_mail)
     mime_converter.dart        MIME parsing and building
     ical_service.dart          iCalendar parsing and generation, meeting replies
     contacts_io.dart           CSV and vCard import/export
     html_sanitizer.dart        Safe HTML display, quoting, HTML↔text
     autoconfig_service.dart    ISPDB, autoconfig and MX discovery
+    dns_mx.dart                Minimal DNS client for MX lookups
     notification_service.dart  Desktop notifications over D-Bus
     file_dialogs.dart          Portal / zenity / kdialog file dialogs
     print_service.dart         Printable HTML
@@ -169,6 +175,7 @@ lib/
   widgets/                     Ribbon, folder pane, message list, reading pane,
                                status bar, navigation bar, dialogs
 linux/                         GTK runner (application id systems.fu.look_in)
+tool/                          Test helpers (throwaway keyring session)
 packaging/                     Desktop entry and install script
 ```
 
@@ -190,6 +197,12 @@ java -Dgreenmail.setup.test.all -Dgreenmail.hostname=127.0.0.1 \
   -Dgreenmail.users=alice:secret@example.com,bob:secret@example.com,carol:secret@example.com \
   -Dgreenmail.users.login=email -jar greenmail-standalone.jar
 flutter test test/integration
+```
+
+The system-keyring tests write real keyring items, so they are skipped unless enabled. `tool/test_with_keyring.sh` runs them against a throwaway GNOME Keyring on a private D-Bus session, never your own keyring (needs `gnome-keyring` and `dbus-run-session`):
+
+```bash
+tool/test_with_keyring.sh test/secret_store_test.dart
 ```
 
 To try the app against GreenMail, add an account for `alice@example.com` (password `secret`). Use server `127.0.0.1`, IMAP port 3143, SMTP port 3025 and no encryption.

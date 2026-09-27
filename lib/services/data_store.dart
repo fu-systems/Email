@@ -16,6 +16,7 @@ import '../models/outgoing_message.dart';
 import 'app_log.dart';
 import 'credential_store.dart';
 import 'database_service.dart';
+import 'secret_store.dart';
 
 /// The app's local data layer: synchronous in-memory caches for the UI,
 /// written through to SQLite so everything survives restarts and is
@@ -52,6 +53,16 @@ class DataStore {
   final List<OutgoingMessage> _outbox = [];
   final Map<String, String> _settings = {};
 
+  /// Passwords and sign-in tokens by key (`password:<accountId>`,
+  /// `oauth:<accountId>`), mirrored from [_secretStore].
+  final Map<String, String> _secrets = {};
+  late final FileSecretStore _fileSecrets = FileSecretStore(db, cipher);
+  late SecretStore _secretStore = _fileSecrets;
+  Future<void> _secretWrites = Future.value();
+
+  /// Why the preferred secret store could not be used, if it couldn't.
+  String? secretStoreError;
+
   DataStore(this.db, this.cipher) {
     _load();
   }
@@ -70,16 +81,17 @@ class DataStore {
     final cipher = await CredentialCipher.load(File(p.join(dir, 'master.key')));
     final store = DataStore(AppDatabase.open(p.join(dir, 'look_in.db')), cipher);
     await store._migrateSharedPreferences();
+    await store._openPreferredSecretStore();
     _instance = store;
     return store;
   }
 
   void _load() {
-    for (final row in db.loadAccounts()) {
+    _secrets.addAll(_fileSecrets.readAllSync());
+    for (final data in db.loadAccounts()) {
       try {
-        final password = cipher.decrypt(row.secret) ?? '';
-        final account =
-            EmailAccount.fromMap({...row.data, 'password': password});
+        final account = EmailAccount.fromMap(
+            {...data, 'password': _secrets['password:${data['id']}'] ?? ''});
         _accounts[account.id] = account;
       } catch (_) {
         // Skip unreadable rows rather than failing startup.
@@ -131,6 +143,120 @@ class DataStore {
 
   void close() => db.close();
 
+  // ─── Secrets ───────────────────────────────────────────────────────
+
+  /// The store currently holding secrets (`file` or `keyring`).
+  String get secretStoreId => _secretStore.id;
+
+  String get secretStoreLabel => _secretStore.label;
+
+  String? secret(String key) => _secrets[key];
+
+  /// Saves (or with null, deletes) a secret. The in-memory copy changes
+  /// immediately; the keyring is written in the background, in order.
+  void setSecret(String key, String? value) {
+    if (value == null || value.isEmpty) {
+      if (_secrets.remove(key) == null) return;
+    } else {
+      if (_secrets[key] == value) return;
+      _secrets[key] = value;
+    }
+    final store = _secretStore;
+    if (store is FileSecretStore) {
+      value == null || value.isEmpty
+          ? db.deleteSecret(key)
+          : store.writeSync(key, value);
+      return;
+    }
+    _secretWrites = _secretWrites.then((_) async {
+      try {
+        value == null || value.isEmpty
+            ? await store.delete(key)
+            : await store.write(key, value);
+      } catch (e, st) {
+        AppLog.write('Could not save a secret to ${store.label}: $e', st);
+      }
+    });
+  }
+
+  /// Waits for background secret writes (before exiting).
+  Future<void> flushSecrets() => _secretWrites;
+
+  /// Opens the store chosen in the settings. New installations use the
+  /// system keyring when one is running; existing ones keep their store
+  /// until the user switches in Options.
+  Future<void> _openPreferredSecretStore() async {
+    var preferred = getString('secretStore');
+    if (preferred == null) {
+      preferred = _accounts.isEmpty && _secrets.isEmpty ? 'keyring' : 'file';
+      if (preferred == 'file') setString('secretStore', 'file');
+    }
+    if (preferred != 'keyring') return;
+    final keyring = await SecretServiceStore.connect();
+    if (keyring == null) {
+      if (getString('secretStore') == 'keyring') {
+        secretStoreError = 'The system keyring is not available, so saved '
+            'passwords could not be read.';
+      }
+      return;
+    }
+    try {
+      final values = await keyring.readAll();
+      _secretStore = keyring;
+      setString('secretStore', 'keyring');
+      // Only this installation's accounts: another copy of Look In (say a
+      // Flatpak next to a native build) may share the keyring.
+      _secrets
+        ..clear()
+        ..addEntries(values.entries.where((e) => _isOwnSecret(e.key)));
+      _applyPasswords();
+    } catch (e) {
+      secretStoreError = 'The system keyring could not be opened: $e';
+      await keyring.close();
+    }
+  }
+
+  bool _isOwnSecret(String key) =>
+      _accounts.containsKey(key.substring(key.indexOf(':') + 1));
+
+  void _applyPasswords() {
+    for (final a in _accounts.values.toList()) {
+      _accounts[a.id] = a.copyWith(password: _secrets['password:${a.id}'] ?? '');
+    }
+  }
+
+  /// Moves every secret to the system keyring (`keyring`) or to Look In's
+  /// encrypted file (`file`), then removes them from the old store.
+  Future<void> useSecretStore(String id,
+      {Future<SecretServiceStore?> Function()? connect}) async {
+    if (id == _secretStore.id) return;
+    await flushSecrets();
+    final SecretStore target;
+    if (id == 'keyring') {
+      final keyring = await (connect ?? SecretServiceStore.connect)();
+      if (keyring == null) {
+        throw const SecretStoreException(
+            'No system keyring (Secret Service) is running.');
+      }
+      target = keyring;
+    } else {
+      target = _fileSecrets;
+    }
+    for (final e in _secrets.entries) {
+      await target.write(e.key, e.value);
+    }
+    final old = _secretStore;
+    _secretStore = target;
+    setString('secretStore', target.id);
+    secretStoreError = null;
+    for (final key in _secrets.keys) {
+      try {
+        await old.delete(key);
+      } catch (_) {}
+    }
+    await old.close();
+  }
+
   // ─── Accounts ──────────────────────────────────────────────────────
 
   List<EmailAccount> get accounts => _accounts.values.toList();
@@ -139,6 +265,7 @@ class DataStore {
 
   void saveAccount(EmailAccount account) {
     _accounts[account.id] = account;
+    setSecret('password:${account.id}', account.password);
     _persistAccountOrder();
   }
 
@@ -146,18 +273,17 @@ class DataStore {
     var order = 0;
     db.transaction(() {
       for (final a in _accounts.values) {
-        db.upsertAccount(
-          a.id,
-          a.toMap(includePassword: false),
-          a.password.isEmpty ? null : cipher.encrypt(a.password),
-          sortOrder: order++,
-        );
+        db.upsertAccount(a.id, a.toMap(includePassword: false),
+            sortOrder: order++);
       }
     });
   }
 
   void removeAccount(String id) {
     _accounts.remove(id);
+    for (final key in _secrets.keys.where((k) => k.endsWith(':$id')).toList()) {
+      setSecret(key, null);
+    }
     final folders = _folders.remove(id) ?? const [];
     for (final f in folders) {
       _messages.remove(f.id);

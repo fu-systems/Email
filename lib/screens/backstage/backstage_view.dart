@@ -33,8 +33,12 @@ class _BackstageViewState extends State<BackstageView> {
   late BackstagePage _page = widget.initialPage;
 
   Future<void> _exit() async {
-    // Close the database cleanly (flushes the WAL) before quitting.
-    context.read<MailProvider>().store.close();
+    // Finish keyring writes and close the database cleanly (flushes the
+    // WAL) before quitting.
+    final store = context.read<MailProvider>().store;
+    await store.flushSecrets().timeout(const Duration(seconds: 5),
+        onTimeout: () {});
+    store.close();
     exit(0);
   }
 
@@ -481,6 +485,80 @@ class _OpenExportPage extends StatelessWidget {
 
 // ─── Options ─────────────────────────────────────────────────────────
 
+/// "Store passwords in the system keyring" with the current location and
+/// any problem opening the keyring.
+class _SecretStoreOption extends StatefulWidget {
+  final DataStore store;
+
+  const _SecretStoreOption({required this.store});
+
+  @override
+  State<_SecretStoreOption> createState() => _SecretStoreOptionState();
+}
+
+class _SecretStoreOptionState extends State<_SecretStoreOption> {
+  bool _busy = false;
+
+  Future<void> _toggle(bool useKeyring) async {
+    setState(() => _busy = true);
+    try {
+      await widget.store.useSecretStore(useKeyring ? 'keyring' : 'file');
+      if (mounted) {
+        showStatusMessage(
+            context,
+            useKeyring
+                ? 'Passwords moved to the system keyring'
+                : 'Passwords moved to Look In\'s encrypted file');
+      }
+    } catch (e) {
+      if (mounted) showStatusMessage(context, 'Could not switch: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final store = widget.store;
+    final error = store.secretStoreError;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        CheckboxListTile(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          controlAffinity: ListTileControlAffinity.leading,
+          value: store.secretStoreId == 'keyring',
+          onChanged: _busy ? null : (v) => _toggle(v ?? false),
+          title: const Text(
+              'Store passwords and sign-in tokens in the system keyring '
+              '(GNOME Keyring, KWallet)',
+              style: TextStyle(fontSize: 13)),
+          secondary: _busy
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : null,
+        ),
+        Text(
+          error ??
+              (store.secretStoreId == 'keyring'
+                  ? 'Your desktop keyring protects them and unlocks when you '
+                      'sign in to your computer.'
+                  : 'They are encrypted with a key kept in Look In\'s data '
+                      'folder.'),
+          style: TextStyle(
+              fontSize: 12,
+              color: error == null
+                  ? OutlookTheme.textSecondary
+                  : Colors.red.shade700),
+        ),
+      ],
+    );
+  }
+}
+
 class _OptionsPage extends StatelessWidget {
   const _OptionsPage();
 
@@ -585,6 +663,8 @@ class _OptionsPage extends StatelessWidget {
             'Account Settings.',
             style: TextStyle(fontSize: 12, color: OutlookTheme.textSecondary),
           ),
+          heading('Security'),
+          _SecretStoreOption(store: mail.store),
           heading('Signatures'),
           for (final a in mail.accounts)
             ListTile(

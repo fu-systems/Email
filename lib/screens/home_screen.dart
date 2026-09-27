@@ -40,6 +40,19 @@ class _HomeScreenState extends State<HomeScreen> {
   final _rootFocus = FocusNode(debugLabel: 'home');
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final problem = context.read<MailProvider>().store.secretStoreError;
+      if (problem != null) {
+        showStatusMessage(context,
+            '$problem Check File > Options > Security.', isError: true);
+      }
+    });
+  }
+
+  @override
   void dispose() {
     _searchFocus.dispose();
     _rootFocus.dispose();
