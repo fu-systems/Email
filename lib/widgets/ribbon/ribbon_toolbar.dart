@@ -273,8 +273,8 @@ class _LargeRibbonButtonState extends State<_LargeRibbonButton> {
                   ? () => _showItemMenu(context, item)
                   : item.onTap,
           child: Container(
-            width: 62,
-            padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 2),
+            constraints: const BoxConstraints(minWidth: 50, maxWidth: 86),
+            padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 5),
             decoration: BoxDecoration(
               color: item.isChecked
                   ? OutlookTheme.selectedItemBackground
@@ -347,7 +347,7 @@ class _SmallRibbonButtonState extends State<_SmallRibbonButton> {
                   ? () => _showItemMenu(context, item)
                   : item.onTap,
           child: Container(
-            height: 24,
+            height: 21,
             padding: const EdgeInsets.symmetric(horizontal: 5),
             decoration: BoxDecoration(
               color: item.isChecked

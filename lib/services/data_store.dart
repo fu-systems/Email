@@ -13,6 +13,7 @@ import '../models/email_message.dart';
 import '../models/folder.dart';
 import '../models/mail_rule.dart';
 import '../models/outgoing_message.dart';
+import 'app_log.dart';
 import 'credential_store.dart';
 import 'database_service.dart';
 
@@ -61,6 +62,7 @@ class DataStore {
   static Future<DataStore> initialize({String? directory}) async {
     final dir = directory ?? (await getApplicationSupportDirectory()).path;
     await Directory(dir).create(recursive: true);
+    AppLog.install(dir);
     final cipher = await CredentialCipher.load(File(p.join(dir, 'master.key')));
     final store = DataStore(AppDatabase.open(p.join(dir, 'look_in.db')), cipher);
     await store._migrateSharedPreferences();

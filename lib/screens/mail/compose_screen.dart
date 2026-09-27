@@ -62,7 +62,6 @@ class _ComposeScreenState extends State<ComposeScreen> {
   bool _showBcc = false;
   bool _isSending = false;
   bool _isLoadingOriginal = false;
-  bool _dirty = false;
   String? _error;
   String? _draftMessageId;
   String? _outboxId;
@@ -78,22 +77,11 @@ class _ComposeScreenState extends State<ComposeScreen> {
         mail.currentAccount;
     _showBcc = false;
     _prefill();
-    for (final c in [
-      _toController,
-      _ccController,
-      _bccController,
-      _subjectController,
-      _bodyController,
-    ]) {
-      c.addListener(_markDirty);
-    }
   }
 
-  void _markDirty() {
-    if (!_dirty && _snapshot() != _initialSnapshot) {
-      setState(() => _dirty = true);
-    }
-  }
+  /// Whether the user changed anything since the message was opened or
+  /// last saved (programmatic fills such as quoting reset the baseline).
+  bool get _dirty => _snapshot() != _initialSnapshot;
 
   String _snapshot() => [
         _toController.text,
@@ -101,7 +89,9 @@ class _ComposeScreenState extends State<ComposeScreen> {
         _bccController.text,
         _subjectController.text,
         _bodyController.text,
-        _attachments.length,
+        _attachments.map((a) => a.localPath ?? a.id).join(','),
+        _importance.name,
+        _account?.id,
       ].join('\u0000');
 
   // ─── Prefill ───────────────────────────────────────────────────────
@@ -131,6 +121,8 @@ class _ComposeScreenState extends State<ComposeScreen> {
         _prefillDraft(original!);
         break;
     }
+    // Like Outlook, typing starts above the signature and quoted text.
+    _bodyController.selection = const TextSelection.collapsed(offset: 0);
     _initialSnapshot = _snapshot();
   }
 
@@ -367,7 +359,6 @@ class _ComposeScreenState extends State<ComposeScreen> {
           localPath: path,
         ));
       }
-      _dirty = true;
     });
     final total = _attachments.fold<int>(0, (s, a) => s + a.size);
     if (total > 20 * 1024 * 1024 && mounted) {
@@ -501,7 +492,6 @@ class _ComposeScreenState extends State<ComposeScreen> {
       if (!mounted) return true;
       setState(() {
         _draftMessageId = saved.draftMessageId;
-        _dirty = false;
         _initialSnapshot = _snapshot();
       });
       if (closeAfter) {
@@ -578,7 +568,8 @@ class _ComposeScreenState extends State<ComposeScreen> {
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _requestClose();
+        // Runs while the Navigator is busy; close afterwards.
+        if (!didPop) Future.microtask(_requestClose);
       },
       child: CallbackShortcuts(
         bindings: {
@@ -589,8 +580,9 @@ class _ComposeScreenState extends State<ComposeScreen> {
               _checkNames(),
           const SingleActivator(LogicalKeyboardKey.escape): _requestClose,
         },
+        // No autofocus here: the To field (new message) or the body
+        // (reply/forward) takes focus; shortcuts bubble up from there.
         child: Focus(
-          autofocus: true,
           child: Scaffold(
             body: Column(
               children: [
@@ -613,7 +605,6 @@ class _ComposeScreenState extends State<ComposeScreen> {
                   onImportance: (value) => setState(() {
                     _importance =
                         _importance == value ? MessageImportance.normal : value;
-                    _dirty = true;
                   }),
                   onSave: () => _saveDraft(),
                   onDiscard: () async {
@@ -649,10 +640,8 @@ class _ComposeScreenState extends State<ComposeScreen> {
                         _HeaderFields(
                           accounts: accounts,
                           account: _account,
-                          onAccountChanged: (a) => setState(() {
-                            _account = a;
-                            _dirty = true;
-                          }),
+                          onAccountChanged: (a) =>
+                              setState(() => _account = a),
                           onSend: _send,
                           isSending: _isSending,
                           toController: _toController,
@@ -668,10 +657,8 @@ class _ComposeScreenState extends State<ComposeScreen> {
                         if (_attachments.isNotEmpty)
                           _AttachmentStrip(
                             attachments: _attachments,
-                            onRemove: (a) => setState(() {
-                              _attachments.remove(a);
-                              _dirty = true;
-                            }),
+                            onRemove: (a) =>
+                                setState(() => _attachments.remove(a)),
                           ),
                         Expanded(
                           child: Padding(
@@ -831,7 +818,7 @@ class _ComposeRibbon extends StatelessWidget {
     const separator = VerticalDivider(width: 9, indent: 6, endIndent: 6);
 
     return Container(
-      height: 76,
+      height: 88,
       decoration: OutlookTheme.ribbonDecoration,
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
       child: Row(
@@ -1077,10 +1064,12 @@ class _HeaderFields extends StatelessWidget {
                   onLabelTap: onAddressBook,
                   trailing: showBcc
                       ? null
-                      : TextButton(
-                          onPressed: onShowBcc,
-                          child: const Text('Bcc',
-                              style: TextStyle(fontSize: 12)),
+                      : ExcludeFocus(
+                          child: TextButton(
+                            onPressed: onShowBcc,
+                            child: const Text('Bcc',
+                                style: TextStyle(fontSize: 12)),
+                          ),
                         ),
                   child: RecipientField(
                     controller: toController,
@@ -1103,6 +1092,7 @@ class _HeaderFields extends StatelessWidget {
                   label: 'Subject',
                   child: TextField(
                     controller: subjectController,
+                    textInputAction: TextInputAction.next,
                     onChanged: (_) => onSubjectChanged(),
                     style: const TextStyle(fontSize: 13),
                     decoration: _fieldDecoration,
@@ -1162,7 +1152,11 @@ class _FieldRow extends StatelessWidget {
           if (onLabelTap != null)
             Tooltip(
               message: 'Select names from the Address Book',
-              child: InkWell(onTap: onLabelTap, child: labelWidget),
+              child: InkWell(
+                onTap: onLabelTap,
+                canRequestFocus: false,
+                child: labelWidget,
+              ),
             )
           else
             labelWidget,
@@ -1226,13 +1220,17 @@ class _RecipientFieldState extends State<RecipientField> {
         widget.controller.text,
         option.isGroup ? option.label : option.insertText,
       ),
-      fieldViewBuilder: (context, controller, focusNode, onSubmitted) {
+      fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
         return TextField(
           controller: controller,
           focusNode: focusNode,
           autofocus: widget.autofocus,
           style: const TextStyle(fontSize: 13),
           decoration: _fieldDecoration,
+          // Enter picks the highlighted suggestion and keeps the focus
+          // here (a single-line field would otherwise unfocus on submit).
+          onSubmitted: (_) => onFieldSubmitted(),
+          onEditingComplete: () {},
         );
       },
       optionsViewBuilder: (context, onSelected, options) {

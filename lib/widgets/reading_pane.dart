@@ -947,6 +947,12 @@ class _MessageBodyState extends State<_MessageBody> {
                     color: OutlookTheme.textSecondary,
                   ),
                   'img': Style(width: Width.auto()),
+                  // flutter_html ignores the cellpadding attribute.
+                  'td': Style(
+                      padding: HtmlPaddings.symmetric(horizontal: 6, vertical: 3)),
+                  'th': Style(
+                      padding: HtmlPaddings.symmetric(horizontal: 6, vertical: 3),
+                      textAlign: TextAlign.left),
                 },
               ),
             ),

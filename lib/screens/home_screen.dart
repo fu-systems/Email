@@ -134,10 +134,17 @@ class _HomeScreenState extends State<HomeScreen> {
       showDialog(context: context, builder: (_) => const RulesDialog());
 
   void _focusSearch() {
-    context.read<NavigationProvider>().switchSection(NavigationSection.mail);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    final nav = context.read<NavigationProvider>();
+    if (nav.currentSection == NavigationSection.mail) {
       _searchFocus.requestFocus();
+      return;
+    }
+    // The search box only exists once the Mail view has been built.
+    nav.switchSection(NavigationSection.mail);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _searchFocus.requestFocus();
     });
+    WidgetsBinding.instance.scheduleFrame();
   }
 
   Future<void> _renameSelectedFolder() async {
@@ -861,9 +868,12 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Returns keyboard focus to the main window after clicks outside text
   /// fields, so that shortcuts keep working.
   void _reclaimFocus() {
+    WidgetsBinding.instance.scheduleFrame();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final now = FocusManager.instance.primaryFocus;
-      final inTextField = now?.context?.widget is EditableText;
+      // A text field's focus node belongs to a Focus inside EditableText.
+      final inTextField =
+          now?.context?.findAncestorStateOfType<EditableTextState>() != null;
       if (!inTextField && !_rootFocus.hasFocus && mounted) {
         final route = ModalRoute.of(context);
         if (route?.isCurrent ?? true) _rootFocus.requestFocus();

@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -588,12 +589,18 @@ class _MessageListItemState extends State<MessageListItem> {
     final interactive = MouseRegion(
       onEnter: (_) => setState(() => _isHovered = true),
       onExit: (_) => setState(() => _isHovered = false),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: _onTap,
-        onDoubleTap: _onDoubleTap,
-        onSecondaryTapDown: (d) => _onSecondaryTap(d.globalPosition),
-        child: content,
+      // Select on mouse-down like Outlook; a GestureDetector onTap would
+      // wait for the double-click timeout first.
+      child: Listener(
+        onPointerDown: (event) {
+          if (event.buttons == kPrimaryMouseButton) _onTap();
+        },
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onDoubleTap: _onDoubleTap,
+          onSecondaryTapDown: (d) => _onSecondaryTap(d.globalPosition),
+          child: content,
+        ),
       ),
     );
 
