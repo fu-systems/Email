@@ -14,6 +14,14 @@ class OutgoingMessage {
   /// HTML alternative of [textBody]; generated when not provided.
   final String? htmlBody;
 
+  /// The editor document (Quill Delta JSON) the HTML was made from, so an
+  /// Outbox item or local draft reopens without losing formatting.
+  final String? editorDelta;
+
+  /// Sanitized HTML of the message being replied to or forwarded, shown
+  /// below the editor and appended to [htmlBody] on sending.
+  final String? quotedHtml;
+
   /// Files to attach; each [Attachment.localPath] points to the file.
   final List<Attachment> attachments;
   final String? inReplyTo;
@@ -37,6 +45,8 @@ class OutgoingMessage {
     this.subject = '',
     this.textBody = '',
     this.htmlBody,
+    this.editorDelta,
+    this.quotedHtml,
     this.attachments = const [],
     this.inReplyTo,
     this.references,
@@ -58,6 +68,8 @@ class OutgoingMessage {
       subject: subject,
       textBody: textBody,
       htmlBody: htmlBody,
+      editorDelta: editorDelta,
+      quotedHtml: quotedHtml,
       attachments: attachments,
       inReplyTo: inReplyTo,
       references: references,
@@ -77,6 +89,8 @@ class OutgoingMessage {
         'subject': subject,
         'textBody': textBody,
         'htmlBody': htmlBody,
+        'editorDelta': ?editorDelta,
+        'quotedHtml': ?quotedHtml,
         'attachments': attachments.map((a) => a.toMap()).toList(),
         'inReplyTo': inReplyTo,
         'references': references,
@@ -99,6 +113,8 @@ class OutgoingMessage {
       subject: map['subject'] as String? ?? '',
       textBody: map['textBody'] as String? ?? '',
       htmlBody: map['htmlBody'] as String?,
+      editorDelta: map['editorDelta'] as String?,
+      quotedHtml: map['quotedHtml'] as String?,
       attachments: (map['attachments'] as List? ?? const [])
           .map((a) => Attachment.fromMap((a as Map).cast<String, dynamic>()))
           .toList(),

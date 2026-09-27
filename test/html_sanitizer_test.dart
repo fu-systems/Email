@@ -425,4 +425,15 @@ void main() {
       expect(quoted, '> Hi\n> \n> Thanks');
     });
   });
+
+  test('point sizes become pixels for the renderer', () {
+    expect(pointsToPixels('font-size: 11pt; margin: 0 0 7.5pt'),
+        'font-size: 14.7px; margin: 0 0 10px');
+    expect(pointsToPixels('width: 100%'), 'width: 100%');
+    final html = sanitizeEmailHtml(
+            '<style>p{font-size:12pt}</style><p style="font-size:9pt">x</p>')
+        .html;
+    expect(html, contains('font-size:16px'));
+    expect(html, contains('font-size:12px'));
+  });
 }

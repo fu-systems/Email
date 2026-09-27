@@ -1,8 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:encrypt/encrypt.dart' as enc;
+import 'package:pointycastle/export.dart';
 
 /// Encrypts account passwords before they are written to the database.
 ///
@@ -12,37 +13,50 @@ import 'package:encrypt/encrypt.dart' as enc;
 /// passwords when the database is copied or backed up on its own; it cannot
 /// protect against malware running as the same user.
 class CredentialCipher {
-  final enc.Key _key;
+  final Uint8List _key;
 
-  CredentialCipher(Uint8List keyBytes) : _key = enc.Key(keyBytes) {
+  CredentialCipher(Uint8List keyBytes) : _key = Uint8List.fromList(keyBytes) {
     if (keyBytes.length != 32) {
       throw ArgumentError('Master key must be 32 bytes');
     }
   }
 
   /// Creates a cipher with a fresh random key (used by tests).
-  factory CredentialCipher.random() =>
-      CredentialCipher(enc.Key.fromSecureRandom(32).bytes);
+  factory CredentialCipher.random() => CredentialCipher(randomBytes(32));
 
   static const _prefix = 'v1:';
 
-  /// Encrypts [plainText]; the result embeds the random IV.
+  /// Cryptographically secure random bytes.
+  static Uint8List randomBytes(int length) {
+    final random = Random.secure();
+    return Uint8List.fromList(
+        List<int>.generate(length, (_) => random.nextInt(256)));
+  }
+
+  GCMBlockCipher _gcm(bool forEncryption, Uint8List iv) =>
+      GCMBlockCipher(AESEngine())
+        ..init(forEncryption,
+            AEADParameters(KeyParameter(_key), 128, iv, Uint8List(0)));
+
+  /// Encrypts [plainText] with AES-256-GCM: `v1:<iv>:<ciphertext+tag>`,
+  /// both base64, with a random 96-bit IV.
   String encrypt(String plainText) {
-    final iv = enc.IV.fromSecureRandom(12);
-    final encrypter = enc.Encrypter(enc.AES(_key, mode: enc.AESMode.gcm));
-    final cipherText = encrypter.encrypt(plainText, iv: iv);
-    return '$_prefix${iv.base64}:${cipherText.base64}';
+    final iv = randomBytes(12);
+    final sealed =
+        _gcm(true, iv).process(Uint8List.fromList(utf8.encode(plainText)));
+    return '$_prefix${base64.encode(iv)}:${base64.encode(sealed)}';
   }
 
   /// Decrypts a value produced by [encrypt]. Returns null when the value is
-  /// malformed or was encrypted with another key.
+  /// malformed, was tampered with, or was encrypted with another key.
   String? decrypt(String? value) {
     if (value == null || !value.startsWith(_prefix)) return null;
     final parts = value.substring(_prefix.length).split(':');
     if (parts.length != 2) return null;
     try {
-      final encrypter = enc.Encrypter(enc.AES(_key, mode: enc.AESMode.gcm));
-      return encrypter.decrypt64(parts[1], iv: enc.IV.fromBase64(parts[0]));
+      final iv = base64.decode(parts[0]);
+      final sealed = base64.decode(parts[1]);
+      return utf8.decode(_gcm(false, iv).process(sealed));
     } catch (_) {
       return null;
     }
@@ -59,7 +73,7 @@ class CredentialCipher {
         // passwords then fail to decrypt and must be re-entered.
       }
     }
-    final key = enc.Key.fromSecureRandom(32).bytes;
+    final key = randomBytes(32);
     await keyFile.parent.create(recursive: true);
     // Create the file empty and restrict it before the key is written.
     await keyFile.writeAsString('', flush: true);

@@ -1726,15 +1726,20 @@ class MailProvider extends ChangeNotifier {
 
   /// Extracts a draft's attachments to a temporary folder so the draft can
   /// be edited and re-sent. Returns attachments with [Attachment.localPath].
-  Future<List<Attachment>> materializeAttachments(EmailMessage message) async {
-    final visible = message.attachments.where((a) => !a.isInline).toList();
-    if (visible.isEmpty) return const [];
+  Future<List<Attachment>> materializeAttachments(EmailMessage message,
+      {bool includeInline = false}) async {
+    final wanted = message.attachments
+        .where((a) => includeInline ? true : !a.isInline)
+        .toList();
+    if (wanted.isEmpty) return const [];
     final dir = await Directory.systemTemp.createTemp('look_in_draft_');
     final result = <Attachment>[];
-    for (final att in visible) {
+    for (final (index, att) in wanted.indexed) {
       final data = await attachmentData(message, att);
       if (data == null) continue;
-      final file = File(p.join(dir.path, p.basename(att.fileName)));
+      // Prefixed so that two attachments with the same name don't clash.
+      final file =
+          File(p.join(dir.path, '$index-${p.basename(att.fileName)}'));
       await file.writeAsBytes(data);
       result.add(Attachment(
         id: att.id,
@@ -1742,6 +1747,8 @@ class MailProvider extends ChangeNotifier {
         mimeType: att.mimeType,
         size: data.length,
         localPath: file.path,
+        contentId: att.isInline ? att.contentId : null,
+        isInline: att.isInline,
       ));
     }
     return result;

@@ -3,8 +3,6 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_html/flutter_html.dart';
-import 'package:flutter_html_table/flutter_html_table.dart';
 import 'package:intl/intl.dart';
 import 'package:path/path.dart' as p;
 import 'package:provider/provider.dart';
@@ -24,6 +22,7 @@ import '../services/mime_converter.dart';
 import '../services/print_service.dart';
 import '../theme/outlook_theme.dart';
 import 'common.dart';
+import 'email_html_view.dart';
 
 /// Outlook 2013-style reading pane showing the selected message.
 class ReadingPane extends StatelessWidget {
@@ -925,36 +924,7 @@ class _MessageBodyState extends State<_MessageBody> {
           child: SelectionArea(
             child: SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-              child: Html(
-                data: sanitized.html,
-                extensions: const [TableHtmlExtension()],
-                onLinkTap: (url, _, _) => _onLink(url),
-                style: {
-                  'body': Style(
-                    margin: Margins.zero,
-                    padding: HtmlPaddings.zero,
-                    fontFamily: OutlookTheme.fontFamily,
-                    fontSize: FontSize(14),
-                    color: OutlookTheme.textPrimary,
-                    lineHeight: const LineHeight(1.45),
-                  ),
-                  'a': Style(color: OutlookTheme.textLink),
-                  'blockquote': Style(
-                    margin: Margins.only(left: 4),
-                    padding: HtmlPaddings.only(left: 10),
-                    border: const Border(
-                        left: BorderSide(color: OutlookTheme.dividerColor, width: 2)),
-                    color: OutlookTheme.textSecondary,
-                  ),
-                  'img': Style(width: Width.auto()),
-                  // flutter_html ignores the cellpadding attribute.
-                  'td': Style(
-                      padding: HtmlPaddings.symmetric(horizontal: 6, vertical: 3)),
-                  'th': Style(
-                      padding: HtmlPaddings.symmetric(horizontal: 6, vertical: 3),
-                      textAlign: TextAlign.left),
-                },
-              ),
+              child: EmailHtmlView(html: sanitized.html, onLinkTap: _onLink),
             ),
           ),
         ),

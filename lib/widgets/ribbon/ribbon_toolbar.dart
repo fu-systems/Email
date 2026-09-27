@@ -8,19 +8,35 @@ import '../../theme/outlook_theme.dart';
 class RibbonToolbar extends StatelessWidget {
   final List<RibbonTabDefinition> tabs;
   final VoidCallback? onFileTab;
+  final bool showFileTab;
+
+  /// The selected tab and its change handler, for ribbons with their own
+  /// state (message windows). Without them the main window's
+  /// NavigationProvider keeps the tab.
+  final String? activeTab;
+  final ValueChanged<String>? onTabChanged;
 
   const RibbonToolbar({
     super.key,
     required this.tabs,
     this.onFileTab,
+    this.showFileTab = true,
+    this.activeTab,
+    this.onTabChanged,
   });
 
   @override
   Widget build(BuildContext context) {
-    final nav = context.watch<NavigationProvider>();
-    final activeTab = tabs.any((t) => t.label == nav.currentRibbonTab)
-        ? nav.currentRibbonTab
+    final local = onTabChanged != null;
+    final current = local
+        ? this.activeTab
+        : context.watch<NavigationProvider>().currentRibbonTab;
+    final activeTab = tabs.any((t) => t.label == current)
+        ? current!
         : tabs.first.label;
+    void select(String label) => local
+        ? onTabChanged!(label)
+        : context.read<NavigationProvider>().switchRibbonTab(label);
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -30,11 +46,11 @@ class RibbonToolbar extends StatelessWidget {
           color: OutlookTheme.primaryBlue,
           child: Row(
             children: [
-              _FileTab(onTap: onFileTab),
+              if (showFileTab) _FileTab(onTap: onFileTab),
               ...tabs.map((tab) => _RibbonTab(
                     label: tab.label,
                     isActive: activeTab == tab.label,
-                    onTap: () => nav.switchRibbonTab(tab.label),
+                    onTap: () => select(tab.label),
                   )),
               const Spacer(),
             ],
@@ -171,6 +187,22 @@ class _RibbonGroup extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final custom = group.custom;
+    if (custom != null) {
+      return Column(
+        children: [
+          Expanded(
+            child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 3),
+                child: custom),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 2),
+            child: Text(group.label, style: OutlookTheme.ribbonGroupLabel),
+          ),
+        ],
+      );
+    }
     // Large buttons stand alone; consecutive small buttons stack in
     // columns of three, as in Office.
     final children = <Widget>[];
@@ -413,7 +445,15 @@ class RibbonGroupDefinition {
   final String label;
   final List<RibbonItem> items;
 
-  const RibbonGroupDefinition({required this.label, required this.items});
+  /// Controls that aren't buttons (font pickers, formatting toggles),
+  /// shown instead of [items].
+  final Widget? custom;
+
+  const RibbonGroupDefinition({
+    required this.label,
+    this.items = const [],
+    this.custom,
+  });
 }
 
 /// An entry of a ribbon button's drop-down menu.

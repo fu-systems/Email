@@ -15,7 +15,7 @@ Phase 4: Ribbon & UI Wiring         [##########] 100%  COMPLETE
 Phase 5: Linux Platform & Build     [##########] 100%  COMPLETE
 Phase 6: Persistence & Offline      [##########] 100%  COMPLETE
 Phase 7: Advanced Features          [##########] 100%  COMPLETE
-Phase 8: Next                       [##--------]  20%  IN PROGRESS  <-- current
+Phase 8: Next                       [###-------]  30%  IN PROGRESS  <-- current
 ```
 
 ---
@@ -167,7 +167,7 @@ Deviations:
 | Sign in with Google | Needs Google's restricted-scope verification; app passwords work meanwhile |
 | Secret Service keyring for passwords and tokens | **Done** (File > Options > Security) |
 | CalDAV / CardDAV sync | Calendar and contacts are local-only today |
-| Rich-text compose editor | Compose is plain text with a generated HTML part |
+| Rich-text compose editor | **Done**: flutter_quill, tabbed message ribbon, inline pictures, HTML signatures |
 | IMAP IDLE push | Sync currently polls on each account's interval |
 | System tray icon and single-instance handling (`mailto:` links) | |
 | Flatpak / AppImage packaging | |
@@ -236,12 +236,15 @@ lib/
 | `provider` | State management |
 | `enough_mail` | IMAP / POP3 / SMTP and MIME |
 | `sqlite3` | Local database (SQLite bundled by its build hook) |
-| `encrypt` | AES-GCM password encryption |
+| `pointycastle` | AES-GCM encryption of secrets without a keyring |
+| `crypto` | PKCE (SHA-256) for Sign in with Microsoft |
 | `flutter_html`, `flutter_html_table` | HTML email rendering |
+| `flutter_quill`, `vsc_quill_delta_to_html` | Rich text compose editor, editor document to email HTML |
 | `html` | HTML sanitizing (pinned below 0.15.7 for flutter_html 3.0.0) |
 | `file_picker` | File dialogs through the XDG portal |
-| `dbus` | Desktop notifications |
+| `dbus` | Desktop notifications, Secret Service keyring |
 | `url_launcher` | Opening links, files and print pages |
 | `path_provider`, `path` | Data directory |
 | `shared_preferences` | Only to migrate data from older versions |
 | `intl`, `uuid`, `collection` | Formatting, ids, utilities |
+| `flutter_localizations` | Localizations the editor needs |

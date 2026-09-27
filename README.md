@@ -22,7 +22,9 @@ Microsoft Outlook 2013, built with Flutter.
 - Offline first: messages, folders and attachments are cached locally. Changes made offline (read, flag, move, delete) are queued, and mail sent offline waits in the Outbox until you reconnect.
 - HTML messages are sanitized before display. Remote pictures are blocked until you allow them for a message or a sender.
 - Open, save and "save all" for attachments; attach files by picker
-- Compose, reply, reply all and forward, with importance, signatures, Bcc, address-book lookup, recipient autocomplete and contact-group expansion
+- Compose, reply, reply all and forward, with importance, Bcc, address-book lookup, recipient autocomplete and contact-group expansion
+- Rich text messages in an Outlook-style message window (MESSAGE / INSERT / OPTIONS / FORMAT TEXT ribbon): fonts, sizes, colors, highlight, bold/italic/underline, lists, indentation, alignment, quotes, links and inline pictures (sent as `cid:` parts). Plain text is one click away, per message or as the default.
+- Replies and forwards keep the original's HTML (tables included) below your text; formatted signatures per account
 - Drafts saved to the server, and a Sent copy saved automatically
 - Missing Sent, Drafts, Trash, Junk and Archive folders are created on demand.
 - Search the current folder or all mailboxes; a server search finds mail that isn't cached
@@ -215,7 +217,7 @@ To try the app against GreenMail, add an account for `alice@example.com` (passwo
 - Microsoft accounts use IMAP and SMTP with OAuth. Calendar and contacts don't sync with them yet (planned through Microsoft Graph). There is no Exchange ActiveSync or EWS.
 - Gmail needs an app password; Sign in with Google isn't available yet.
 - The calendar and contacts are local. They are not synced over CalDAV or CardDAV; exchange them through .ics, .vcf and .csv files or meeting invitations.
-- Messages are written as plain text; a matching HTML part is generated when sending. There is no rich-text editor.
+- The editor has no tables. Replies and forwards keep the original's tables, but they aren't editable in the message.
 - Printing opens a print-ready page in your web browser.
 - There is no system tray icon.
 - Sync fetches the most recent messages of each folder. Older ones are fetched with **More messages on the server** at the end of the message list.

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_quill/flutter_quill.dart' show QuillController;
 import 'package:provider/provider.dart';
 
 import '../../models/email_account.dart';
@@ -13,6 +14,7 @@ import '../../services/mail_backend.dart';
 import '../../services/oauth/oauth_config.dart';
 import '../../services/oauth/token_manager.dart';
 import '../../theme/outlook_theme.dart';
+import '../../widgets/compose/signature_editor.dart';
 import 'microsoft_sign_in.dart';
 
 /// Add Account wizard (first run or File > Add Account), or the Account
@@ -61,7 +63,7 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
   final _smtpPortController = TextEditingController(text: '587');
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _signatureController = TextEditingController();
+  QuillController _signature = signatureController(null);
 
   IncomingProtocol _protocol = IncomingProtocol.imap;
   ConnectionSecurity _incomingSecurity = ConnectionSecurity.ssl;
@@ -110,7 +112,8 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
     _smtpSecurity = a.smtpSecurity;
     _usernameController.text = a.username;
     _passwordController.text = a.password;
-    _signatureController.text = a.signature ?? '';
+    _signature.dispose();
+    _signature = signatureController(a);
     _acceptInvalidCerts = a.acceptInvalidCertificates;
     _leaveOnServer = a.leaveMessagesOnServer;
     _isEnabled = a.isEnabled;
@@ -147,10 +150,10 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
       _smtpPortController,
       _usernameController,
       _passwordController,
-      _signatureController,
     ]) {
       c.dispose();
     }
+    _signature.dispose();
     super.dispose();
   }
 
@@ -281,9 +284,8 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
       oauthTenant: _useOAuth ? _oauthRegistration?.tenant : null,
       isDefault: base == null ? _isDefault : _isDefault,
       isEnabled: _isEnabled,
-      signature: _signatureController.text.trim().isEmpty
-          ? null
-          : _signatureController.text.trimRight(),
+      signature: signatureValues(_signature).text,
+      signatureHtml: signatureValues(_signature).html,
       syncIntervalMinutes: _syncInterval,
       leaveMessagesOnServer: _leaveOnServer,
       acceptInvalidCertificates: _acceptInvalidCerts,
@@ -578,12 +580,7 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
                   style: TextStyle(fontSize: 12, color: OutlookTheme.textSecondary),
                 ),
                 const SizedBox(height: 6),
-                TextField(
-                  controller: _signatureController,
-                  maxLines: 5,
-                  minLines: 3,
-                  decoration: const InputDecoration(hintText: 'Your signature'),
-                ),
+                SignatureEditor(controller: _signature, height: 120),
                 const SizedBox(height: 16),
                 _testResult(),
               ],

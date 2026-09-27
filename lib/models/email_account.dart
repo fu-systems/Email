@@ -36,7 +36,12 @@ class EmailAccount {
   // Account state
   final bool isDefault;
   final bool isEnabled;
+
+  /// Plain-text signature (for plain-text messages).
   final String? signature;
+
+  /// Formatted signature (for HTML messages); [signature] is its text.
+  final String? signatureHtml;
 
   /// How often the account's folders are checked for new mail.
   final int syncIntervalMinutes;
@@ -67,6 +72,7 @@ class EmailAccount {
     this.isDefault = false,
     this.isEnabled = true,
     this.signature,
+    this.signatureHtml,
     this.syncIntervalMinutes = 5,
     this.leaveMessagesOnServer = true,
     this.acceptInvalidCertificates = false,
@@ -102,6 +108,7 @@ class EmailAccount {
     bool? isDefault,
     bool? isEnabled,
     String? signature,
+    String? signatureHtml,
     bool clearSignature = false,
     int? syncIntervalMinutes,
     bool? leaveMessagesOnServer,
@@ -127,6 +134,8 @@ class EmailAccount {
       isDefault: isDefault ?? this.isDefault,
       isEnabled: isEnabled ?? this.isEnabled,
       signature: clearSignature ? null : (signature ?? this.signature),
+      signatureHtml:
+          clearSignature ? null : (signatureHtml ?? this.signatureHtml),
       syncIntervalMinutes: syncIntervalMinutes ?? this.syncIntervalMinutes,
       leaveMessagesOnServer:
           leaveMessagesOnServer ?? this.leaveMessagesOnServer,
@@ -157,6 +166,7 @@ class EmailAccount {
         'isDefault': isDefault ? 1 : 0,
         'isEnabled': isEnabled ? 1 : 0,
         'signature': signature,
+        'signatureHtml': ?signatureHtml,
         'syncIntervalMinutes': syncIntervalMinutes,
         'leaveMessagesOnServer': leaveMessagesOnServer ? 1 : 0,
         'acceptInvalidCertificates': acceptInvalidCertificates ? 1 : 0,
@@ -192,6 +202,7 @@ class EmailAccount {
         isDefault: (map['isDefault'] as int? ?? 0) == 1,
         isEnabled: (map['isEnabled'] as int? ?? 1) == 1,
         signature: map['signature'] as String?,
+        signatureHtml: map['signatureHtml'] as String?,
         syncIntervalMinutes: map['syncIntervalMinutes'] as int? ?? 5,
         leaveMessagesOnServer:
             (map['leaveMessagesOnServer'] as int? ?? 1) == 1,

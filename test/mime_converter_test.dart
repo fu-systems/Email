@@ -113,6 +113,58 @@ void main() {
     await dir.delete(recursive: true);
   });
 
+  test('inline images go into multipart/related with Content-IDs',
+      () async {
+    final dir = await Directory.systemTemp.createTemp('inline');
+    addTearDown(() => dir.delete(recursive: true));
+    final png = File('${dir.path}/logo.png')
+      ..writeAsBytesSync([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+    final pdf = File('${dir.path}/report.pdf')..writeAsBytesSync([9, 9, 9]);
+    final message = _message(
+      text: 'See the logo',
+      html: '<div>See <img src="cid:logo1@lookin"> the logo</div>',
+      attachments: [
+        Attachment(
+          id: 'i1',
+          fileName: 'logo.png',
+          mimeType: 'image/png',
+          size: 7,
+          localPath: png.path,
+          contentId: 'logo1@lookin',
+          isInline: true,
+        ),
+        Attachment(
+          id: 'a1',
+          fileName: 'report.pdf',
+          mimeType: 'application/pdf',
+          size: 3,
+          localPath: pdf.path,
+        ),
+      ],
+    );
+    final mime = await MimeConverter.buildMimeMessage(message, _account);
+    final text = mime.renderMessage();
+    final parsed = enough.MimeMessage.parseFromText(text);
+    expect(parsed.mediaType.sub, enough.MediaSubtype.multipartMixed);
+    final alternative = parsed.parts!.first;
+    expect(alternative.mediaType.sub, enough.MediaSubtype.multipartAlternative);
+    final related = alternative.parts!.last;
+    expect(related.mediaType.sub, enough.MediaSubtype.multipartRelated);
+    expect(related.parts!.first.mediaType.sub, enough.MediaSubtype.textHtml);
+    expect(related.parts!.last.getHeaderValue('Content-ID'), '<logo1@lookin>');
+    expect(text, contains('Content-Disposition: inline'));
+
+    final received = MimeConverter.toEmailMessage(parsed,
+        id: 'x', accountId: 'a', folderId: 'f');
+    final logo = received.attachments.firstWhere((a) => a.fileName == 'logo.png');
+    expect(logo.isInline, isTrue);
+    expect(logo.contentId, 'logo1@lookin');
+    expect(received.visibleAttachments.map((a) => a.fileName), ['report.pdf']);
+    final resolve = MimeConverter.cidResolver(
+        MimeConverter.sourceBytes(parsed), received.attachments);
+    expect(resolve('logo1@lookin'), startsWith('data:image/png;base64,'));
+  });
+
   test('Bcc is never part of the transmitted message', () async {
     final m = OutgoingMessage(
       id: 'b',

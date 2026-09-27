@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:flutter_quill/flutter_quill.dart' show FlutterQuillLocalizations;
 import 'package:provider/provider.dart';
 
 import 'theme/outlook_theme.dart';
@@ -11,6 +13,14 @@ import 'screens/home_screen.dart';
 import 'screens/settings/account_setup_screen.dart';
 import 'services/data_store.dart';
 import 'services/notification_service.dart';
+
+/// Material, widgets and editor (flutter_quill) localizations.
+const appLocalizationsDelegates = <LocalizationsDelegate<dynamic>>[
+  GlobalMaterialLocalizations.delegate,
+  GlobalWidgetsLocalizations.delegate,
+  GlobalCupertinoLocalizations.delegate,
+  FlutterQuillLocalizations.delegate,
+];
 
 class LookInApp extends StatelessWidget {
   const LookInApp({super.key});
@@ -44,6 +54,7 @@ class LookInApp extends StatelessWidget {
         title: 'Look In',
         debugShowCheckedModeBanner: false,
         theme: OutlookTheme.themeData,
+        localizationsDelegates: appLocalizationsDelegates,
         home: const _AppRoot(),
         routes: {
           '/account-setup': (context) => const AccountSetupScreen(),

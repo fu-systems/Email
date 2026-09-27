@@ -178,6 +178,8 @@ int _sanitizeElement(
           blocked += result.count;
         }
       }
+      final converted = pointsToPixels(attributes[key] ?? '');
+      if (converted != attributes[key]) attributes[key] = converted;
     }
   }
 
@@ -241,15 +243,30 @@ int _sanitizeElement(
       }
     }
   }
-  if (tag == 'style' && !allowRemoteImages) {
-    final css = element.text;
-    final result = _stripRemoteCss(css);
-    if (result.count > 0) {
-      element.text = result.css;
-      blocked += result.count;
+  if (tag == 'style') {
+    var css = element.text;
+    if (!allowRemoteImages) {
+      final result = _stripRemoteCss(css);
+      if (result.count > 0) {
+        css = result.css;
+        blocked += result.count;
+      }
     }
+    final converted = pointsToPixels(css);
+    if (converted != element.text) element.text = converted;
   }
   return blocked;
+}
+
+/// Rewrites CSS lengths in points (Outlook writes `font-size: 11pt`) as
+/// pixels: the HTML renderer reads every length unit as pixels.
+String pointsToPixels(String css) {
+  if (!css.contains('pt')) return css;
+  return css.replaceAllMapped(RegExp(r'(\d*\.?\d+)pt\b'), (m) {
+    final px = double.parse(m.group(1)!) * 4 / 3;
+    final rounded = (px * 10).round() / 10;
+    return '${rounded == rounded.roundToDouble() ? rounded.toInt() : rounded}px';
+  });
 }
 
 ({String css, int count}) _stripRemoteCss(String css) {

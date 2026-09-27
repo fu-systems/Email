@@ -54,6 +54,14 @@ EmailMessage _message(String folderId, int uid,
 
 void main() {
   group('CredentialCipher', () {
+    test('decrypts values written by Look In 0.2 (encrypt package)', () {
+      final key = Uint8List.fromList(List.generate(32, (i) => i * 7 % 256));
+      expect(
+          CredentialCipher(key).decrypt(
+              'v1:DbdyzVzSrIYHDvwN:mph45qFImuS3A5AjqZvKHJaq7LNqqxRkPXIm2mxlJCs='),
+          'päss wörd 🔑');
+    });
+
     test('round-trips and uses a random IV', () {
       final cipher = CredentialCipher.random();
       final a = cipher.encrypt('päss wörd');

@@ -346,7 +346,13 @@ class MimeConverter {
       attachments.add((info: att, data: await file.readAsBytes()));
     }
 
-    final hasMixed = attachments.isNotEmpty || calendarPart != null;
+    // Inline images (cid: in the HTML) go into multipart/related with the
+    // HTML; other files are regular attachments.
+    final inline = attachments
+        .where((a) => a.info.isInline && a.info.contentId != null)
+        .toList();
+    final regular = attachments.where((a) => !inline.contains(a)).toList();
+    final hasMixed = regular.isNotEmpty || calendarPart != null;
     final builder = hasMixed
         ? enough.MessageBuilder.prepareMultipartMixedMessage()
         : enough.MessageBuilder.prepareMultipartAlternativeMessage();
@@ -368,9 +374,23 @@ class MimeConverter {
     final alternative = hasMixed
         ? builder.addPart(mediaSubtype: enough.MediaSubtype.multipartAlternative)
         : builder;
-    alternative
-      ..addTextPlain(message.textBody, transferEncoding: qp)
-      ..addTextHtml(html, transferEncoding: qp);
+    alternative.addTextPlain(message.textBody, transferEncoding: qp);
+    if (inline.isEmpty) {
+      alternative.addTextHtml(html, transferEncoding: qp);
+    } else {
+      final related = alternative.addPart(
+          mediaSubtype: enough.MediaSubtype.multipartRelated);
+      related.addTextHtml(html, transferEncoding: qp);
+      for (final att in inline) {
+        related.addBinary(
+          att.data,
+          enough.MediaType.fromText(att.info.mimeType),
+          filename: att.info.fileName,
+          disposition: enough.ContentDispositionHeader.inline(
+              filename: att.info.fileName, size: att.data.length),
+        ).setHeader('Content-ID', '<${att.info.contentId}>');
+      }
+    }
 
     if (calendarPart != null) {
       builder.addPart(
@@ -385,7 +405,7 @@ class MimeConverter {
         ..text = calendarPart.ics;
     }
 
-    for (final att in attachments) {
+    for (final att in regular) {
       builder.addBinary(
         att.data,
         enough.MediaType.fromText(att.info.mimeType),

@@ -11,10 +11,12 @@ import '../../providers/mail_provider.dart';
 import '../../services/data_store.dart';
 import '../../theme/outlook_theme.dart';
 import '../../widgets/common.dart';
+import '../../widgets/compose/signature_editor.dart';
 import '../calendar/calendar_view.dart';
 import '../contacts/contacts_view.dart';
 import '../mail/mail_dialogs.dart';
 import '../settings/account_setup_screen.dart';
+import '../mail/compose_screen.dart' show ComposeScreen;
 import '../settings/microsoft_sign_in.dart';
 
 enum BackstagePage { info, openExport, options, about }
@@ -656,6 +658,8 @@ class _OptionsPage extends StatelessWidget {
               'selectNextAfterDelete', defaultValue: true),
           toggle('Always download pictures in HTML messages (less private)',
               'alwaysDownloadPictures'),
+          toggle('Compose messages in HTML (formatted text)',
+              ComposeScreen.htmlPreference, defaultValue: true),
           Row(
             children: [
               const Text('Reading Pane:', style: TextStyle(fontSize: 13)),
@@ -738,39 +742,31 @@ class _OptionsPage extends StatelessWidget {
   }
 
   Future<void> _editSignature(BuildContext context, EmailAccount account) async {
-    final controller = TextEditingController(text: account.signature ?? '');
-    final result = await showDialog<String>(
+    final controller = signatureController(account);
+    final saved = await showDialog<bool>(
       context: context,
       builder: (ctx) => OutlookDialog(
         title: 'Signature - ${account.emailAddress}',
-        width: 520,
+        width: 560,
         actions: [
           OutlinedButton(
-            onPressed: () => Navigator.of(ctx).pop(),
+            onPressed: () => Navigator.of(ctx).pop(false),
             child: const Text('Cancel'),
           ),
           ElevatedButton(
-            onPressed: () => Navigator.of(ctx).pop(controller.text),
+            onPressed: () => Navigator.of(ctx).pop(true),
             child: const Text('Save'),
           ),
         ],
-        child: TextField(
-          controller: controller,
-          autofocus: true,
-          maxLines: 8,
-          minLines: 5,
-          decoration: const InputDecoration(
-            hintText: 'Kind regards,\nYour Name',
-          ),
-        ),
+        child: SignatureEditor(controller: controller, height: 180),
       ),
     );
+    final values = signatureValues(controller);
     controller.dispose();
-    if (result == null || !context.mounted) return;
-    final trimmed = result.trimRight();
-    await context.read<AccountProvider>().updateAccount(trimmed.isEmpty
+    if (saved != true || !context.mounted) return;
+    await context.read<AccountProvider>().updateAccount(values.html == null
         ? account.copyWith(clearSignature: true)
-        : account.copyWith(signature: trimmed));
+        : account.copyWith(signature: values.text ?? '', signatureHtml: values.html));
   }
 }
 
