@@ -44,11 +44,16 @@ enum InviteResponse {
 ///
 /// Time zone handling when parsing:
 /// * UTC times (`...Z`) are converted to local time with [DateTime.toLocal].
-/// * Floating times and times with a `TZID` parameter are taken as local
-///   wall-clock time. `VTIMEZONE` definitions are ignored, so an invitation
-///   created in a different time zone shows at its original wall-clock time.
-///   The only exception is a `TZID` naming UTC (for example `UTC`,
-///   `Etc/UTC` or `GMT`), which is treated like a `Z` suffix.
+/// * A time with a `TZID` parameter is converted from that zone to local
+///   time using the calendar's matching `VTIMEZONE` definition (its
+///   `STANDARD`/`DAYLIGHT` observances with yearly `RRULE`s or `RDATE`s).
+///   A `TZID` naming UTC (for example `UTC`, `Etc/UTC` or `GMT`) is treated
+///   like a `Z` suffix.
+/// * Floating times, and `TZID` times without a matching `VTIMEZONE` (there
+///   is no built-in time zone database), are taken as local wall-clock time.
+/// * Recurring events are expanded in local time, so a series from a zone
+///   with different daylight-saving dates can be an hour off for the weeks
+///   in between.
 ///
 /// Recurrence rules are mapped to the closest [RecurrenceRule]; see
 /// [parseEvents] for details.
@@ -91,8 +96,8 @@ class IcalService {
   /// as standalone, non-recurring events with the series' UID. Cancelled
   /// instances are never returned as events.
   ///
-  /// `VTIMEZONE`, `VTODO`, `VJOURNAL` and `VFREEBUSY` blocks are ignored, as
-  /// are `CATEGORIES`.
+  /// `VTODO`, `VJOURNAL` and `VFREEBUSY` blocks are ignored, as are
+  /// `CATEGORIES`.
   static List<CalendarEvent> parseEvents(
     String icsText, {
     String Function()? idGenerator,
@@ -101,8 +106,10 @@ class IcalService {
     try {
       final nextId = idGenerator ?? const Uuid().v4;
       final timestamp = now ?? DateTime.now();
+      final roots = _parseComponents(icsText);
+      _zones = _collectTimeZones(roots);
       final components = <_Component>[];
-      _collectEvents(_parseComponents(icsText), components);
+      _collectEvents(roots, components);
 
       final events = <CalendarEvent>[];
       final masterIndexByUid = <String, int>{};
@@ -148,6 +155,8 @@ class IcalService {
       return events;
     } catch (_) {
       return <CalendarEvent>[];
+    } finally {
+      _zones = const {};
     }
   }
 
@@ -344,6 +353,36 @@ class IcalService {
     'VFREEBUSY',
     'VALARM',
   };
+
+  /// Time zones of the calendar being parsed, by `TZID`. Set for the
+  /// duration of the (synchronous) [parseEvents] call.
+  static Map<String, _TimeZone> _zones = const {};
+
+  static Map<String, _TimeZone> _collectTimeZones(List<_Component> roots) {
+    final zones = <String, _TimeZone>{};
+    void visit(List<_Component> components) {
+      for (final c in components) {
+        if (c.name == 'VTIMEZONE') {
+          final id = c.first('TZID')?.value;
+          final zone = _TimeZone.parse(c);
+          if (id != null && zone != null) zones[_tzidKey(id)] = zone;
+        } else {
+          visit(c.children);
+        }
+      }
+    }
+
+    visit(roots);
+    return zones;
+  }
+
+  static String _tzidKey(String tzid) {
+    var t = tzid.trim();
+    if (t.length >= 2 && t.startsWith('"') && t.endsWith('"')) {
+      t = t.substring(1, t.length - 1).trim();
+    }
+    return t;
+  }
 
   static void _collectEvents(
       List<_Component> components, List<_Component> out) {
@@ -682,10 +721,17 @@ class IcalService {
     if (s == 60) s = 59; // leap second
     if (forceDate) return _IcalDateTime(DateTime(y, mo, d), isDate: true);
     final isUtc = m.group(7) != null || _isUtcZone(tzid);
-    final value = isUtc
-        ? DateTime.utc(y, mo, d, h, mi, s).toLocal()
-        : DateTime(y, mo, d, h, mi, s);
-    return _IcalDateTime(value, isDate: false);
+    if (isUtc) {
+      return _IcalDateTime(DateTime.utc(y, mo, d, h, mi, s).toLocal(),
+          isDate: false);
+    }
+    final zone = tzid == null ? null : _zones[_tzidKey(tzid)];
+    if (zone != null) {
+      final wall = DateTime.utc(y, mo, d, h, mi, s);
+      return _IcalDateTime(wall.subtract(zone.offsetAt(wall)).toLocal(),
+          isDate: false);
+    }
+    return _IcalDateTime(DateTime(y, mo, d, h, mi, s), isDate: false);
   }
 
   static bool _isUtcZone(String? tzid) {
@@ -1111,4 +1157,226 @@ class _IcalDuration {
         start.second,
         start.millisecond,
       ).add(exactPart);
+}
+
+/// A `VTIMEZONE`: the UTC offsets a zone observes and when they apply.
+///
+/// Wall-clock times are represented as [DateTime.utc] values holding the
+/// local fields, so no conversion through the machine's own zone happens.
+class _TimeZone {
+  final List<_Observance> observances;
+
+  const _TimeZone(this.observances);
+
+  static _TimeZone? parse(_Component c) {
+    final observances = <_Observance>[];
+    for (final child in c.children) {
+      if (child.name != 'STANDARD' && child.name != 'DAYLIGHT') continue;
+      final observance = _Observance.parse(child);
+      if (observance != null) observances.add(observance);
+    }
+    return observances.isEmpty ? null : _TimeZone(observances);
+  }
+
+  /// The UTC offset in effect at the wall-clock time [wall]: that of the
+  /// observance with the latest onset at or before it.
+  Duration offsetAt(DateTime wall) {
+    _Observance? current;
+    DateTime? currentOnset;
+    var earliest = observances.first;
+    for (final o in observances) {
+      final onset = o.lastOnsetAtOrBefore(wall);
+      if (onset != null &&
+          (currentOnset == null || onset.isAfter(currentOnset))) {
+        current = o;
+        currentOnset = onset;
+      }
+      if (o.start.isBefore(earliest.start)) earliest = o;
+    }
+    // Before the first onset the zone's earlier offset applies.
+    return current?.offsetTo ?? earliest.offsetFrom;
+  }
+}
+
+/// One `STANDARD` or `DAYLIGHT` block of a `VTIMEZONE`.
+class _Observance {
+  /// First onset, in the wall-clock time in effect before it.
+  final DateTime start;
+  final Duration offsetFrom;
+  final Duration offsetTo;
+  final List<DateTime> rdates;
+
+  /// Yearly rule: onsets in [month] on the [ordinal]th [weekday] (negative
+  /// counts from the end of the month), or on the first of [monthDays]
+  /// that falls on [weekday], or on [monthDays] / the start's day.
+  final bool yearly;
+  final int? month;
+  final int? weekday;
+  final int? ordinal;
+  final List<int> monthDays;
+  final DateTime? until;
+
+  const _Observance({
+    required this.start,
+    required this.offsetFrom,
+    required this.offsetTo,
+    this.rdates = const [],
+    this.yearly = false,
+    this.month,
+    this.weekday,
+    this.ordinal,
+    this.monthDays = const [],
+    this.until,
+  });
+
+  static _Observance? parse(_Component c) {
+    final to = _parseOffset(c.first('TZOFFSETTO')?.value);
+    final startRaw = c.first('DTSTART')?.value;
+    if (to == null || startRaw == null) return null;
+    final start = _parseWall(startRaw);
+    if (start == null) return null;
+    final from = _parseOffset(c.first('TZOFFSETFROM')?.value) ?? to;
+
+    final rdates = <DateTime>[
+      for (final prop in c.all('RDATE'))
+        for (final part in prop.value.split(','))
+          if (_parseWall(part) case final DateTime date) date,
+    ];
+
+    final rule = c.first('RRULE')?.value;
+    if (rule == null) {
+      return _Observance(
+          start: start, offsetFrom: from, offsetTo: to, rdates: rdates);
+    }
+    final parts = <String, String>{};
+    for (final part in rule.split(';')) {
+      final eq = part.indexOf('=');
+      if (eq > 0) {
+        parts[part.substring(0, eq).trim().toUpperCase()] =
+            part.substring(eq + 1).trim().toUpperCase();
+      }
+    }
+    if (parts['FREQ'] != 'YEARLY') {
+      return _Observance(
+          start: start, offsetFrom: from, offsetTo: to, rdates: rdates);
+    }
+    int? weekday;
+    int? ordinal;
+    final byDay = RegExp(r'^([+-]?\d{1,2})?(MO|TU|WE|TH|FR|SA|SU)$')
+        .firstMatch((parts['BYDAY'] ?? '').split(',').first.trim());
+    if (byDay != null) {
+      weekday = IcalService._weekdayCodes.indexOf(byDay.group(2)!) + 1;
+      final n = byDay.group(1);
+      ordinal = n == null ? null : int.tryParse(n.replaceFirst('+', ''));
+      if (ordinal == 0) ordinal = null;
+    }
+    final monthDays = [
+      for (final d in (parts['BYMONTHDAY'] ?? '').split(','))
+        if (int.tryParse(d.trim()) case final int day
+            when day >= 1 && day <= 31)
+          day,
+    ]..sort();
+    // Without BYMONTHDAY a bare weekday means its first occurrence.
+    if (weekday != null && ordinal == null && monthDays.isEmpty) ordinal = 1;
+
+    DateTime? until;
+    final untilRaw = parts['UNTIL'];
+    if (untilRaw != null) {
+      final wall = _parseWall(untilRaw);
+      // UNTIL is normally UTC; compare it in the zone's wall-clock time.
+      if (wall != null) {
+        until = untilRaw.endsWith('Z') ? wall.add(from) : wall;
+      }
+    }
+    return _Observance(
+      start: start,
+      offsetFrom: from,
+      offsetTo: to,
+      rdates: rdates,
+      yearly: true,
+      month: int.tryParse((parts['BYMONTH'] ?? '').split(',').first),
+      weekday: weekday,
+      ordinal: ordinal,
+      monthDays: monthDays,
+      until: until,
+    );
+  }
+
+  /// The latest onset at or before [wall], or null if there is none.
+  DateTime? lastOnsetAtOrBefore(DateTime wall) {
+    DateTime? best;
+    void consider(DateTime? onset, {bool fromRule = false}) {
+      if (onset == null || onset.isAfter(wall) || onset.isBefore(start)) {
+        return;
+      }
+      if (fromRule && until != null && onset.isAfter(until!)) return;
+      if (best == null || onset.isAfter(best!)) best = onset;
+    }
+
+    consider(start);
+    for (final r in rdates) {
+      consider(r);
+    }
+    if (yearly) {
+      consider(_onsetIn(wall.year), fromRule: true);
+      consider(_onsetIn(wall.year - 1), fromRule: true);
+    }
+    return best;
+  }
+
+  DateTime? _onsetIn(int year) {
+    final m = month ?? start.month;
+    if (m < 1 || m > 12) return null;
+    final daysInMonth = DateTime.utc(year, m + 1, 0).day;
+    int? day;
+    if (weekday != null && ordinal != null) {
+      if (ordinal! > 0) {
+        final first = DateTime.utc(year, m, 1).weekday;
+        day = 1 + (weekday! - first + 7) % 7 + 7 * (ordinal! - 1);
+      } else {
+        final last = DateTime.utc(year, m, daysInMonth).weekday;
+        day = daysInMonth - (last - weekday! + 7) % 7 - 7 * (-ordinal! - 1);
+      }
+    } else if (monthDays.isNotEmpty) {
+      for (final d in monthDays) {
+        if (d > daysInMonth) break;
+        if (weekday == null || DateTime.utc(year, m, d).weekday == weekday) {
+          day = d;
+          break;
+        }
+      }
+    } else {
+      day = start.day;
+    }
+    if (day == null || day < 1 || day > daysInMonth) return null;
+    return DateTime.utc(year, m, day, start.hour, start.minute, start.second);
+  }
+
+  /// A DATE-TIME's fields as a UTC value, ignoring any `Z` suffix.
+  static DateTime? _parseWall(String raw) {
+    final v = raw.trim().replaceAll(RegExp(r'[-:]'), '');
+    final m = IcalService._dateTimeRe.firstMatch(v);
+    if (m == null) return null;
+    return DateTime.utc(
+      int.parse(m.group(1)!),
+      int.parse(m.group(2)!),
+      int.parse(m.group(3)!),
+      int.parse(m.group(4)!),
+      int.parse(m.group(5)!),
+      m.group(6) == null ? 0 : int.parse(m.group(6)!),
+    );
+  }
+
+  /// A UTC offset such as `+0200`, `-0500` or `+053000`.
+  static Duration? _parseOffset(String? raw) {
+    if (raw == null) return null;
+    final m = RegExp(r'^([+-])(\d{2})(\d{2})(\d{2})?$').firstMatch(raw.trim());
+    if (m == null) return null;
+    final d = Duration(
+      hours: int.parse(m.group(2)!),
+      minutes: int.parse(m.group(3)!),
+      seconds: m.group(4) == null ? 0 : int.parse(m.group(4)!),
+    );
+    return m.group(1) == '-' ? -d : d;
+  }
 }

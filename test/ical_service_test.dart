@@ -169,7 +169,6 @@ void main() {
 
     test('Outlook invitation with VTIMEZONE, TZID and folded lines', () {
       final events = IcalService.parseEvents(outlookInvite);
-      // The STANDARD/DAYLIGHT blocks (with DTSTART and RRULE) are ignored.
       expect(events, hasLength(1));
       final e = events.single;
       expect(e.title, 'Project sync');
@@ -180,9 +179,9 @@ void main() {
         'for each workstream.\nAgenda: scope; timeline; risks.\n\n'
         'Thanks\nJane',
       );
-      // TZID times are taken as local wall-clock time.
-      expect(e.startTime, DateTime(2026, 1, 12, 10));
-      expect(e.endTime, DateTime(2026, 1, 12, 11, 30));
+      // 10:00 in W. Europe (UTC+1 in January), converted to local time.
+      expect(e.startTime, utc(2026, 1, 12, 9));
+      expect(e.endTime, utc(2026, 1, 12, 10, 30));
       expect(e.organizer, 'jane@example.com');
       expect(e.attendees, ['john@example.com', 'richard@example.com']);
       expect(e.reminder, ReminderTime.fifteenMinutes);
@@ -261,13 +260,160 @@ void main() {
       expect(e2.startTime, utc(2026, 1, 5, 9));
     });
 
-    test('TZID for another zone is local wall-clock time', () {
+    test('TZID without a VTIMEZONE is local wall-clock time', () {
       final e = single([
         'DTSTART;TZID=America/New_York:20260105T090000',
         'DTEND;TZID="America/New_York":20260105T093000',
       ]);
       expect(e.startTime, DateTime(2026, 1, 5, 9));
       expect(e.endTime, DateTime(2026, 1, 5, 9, 30));
+    });
+
+    group('VTIMEZONE', () {
+      String withZone(List<String> zone, List<String> event) => ics([
+            'BEGIN:VCALENDAR',
+            'VERSION:2.0',
+            ...zone,
+            'BEGIN:VEVENT',
+            'UID:tz-1',
+            ...event,
+            'END:VEVENT',
+            'END:VCALENDAR',
+          ]);
+      const newYork = [
+        'BEGIN:VTIMEZONE',
+        'TZID:America/New_York',
+        'BEGIN:DAYLIGHT',
+        'TZOFFSETFROM:-0500',
+        'TZOFFSETTO:-0400',
+        'TZNAME:EDT',
+        'DTSTART:19700308T020000',
+        'RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=2SU',
+        'END:DAYLIGHT',
+        'BEGIN:STANDARD',
+        'TZOFFSETFROM:-0400',
+        'TZOFFSETTO:-0500',
+        'TZNAME:EST',
+        'DTSTART:19701101T020000',
+        'RRULE:FREQ=YEARLY;BYMONTH=11;BYDAY=1SU',
+        'END:STANDARD',
+        'END:VTIMEZONE',
+      ];
+      CalendarEvent parse(List<String> zone, String start) =>
+          IcalService.parseEvents(withZone(zone, [start])).single;
+
+      test('converts from the zone around daylight-saving changes', () {
+        // DST starts on 8 March 2026 and ends on 1 November 2026.
+        expect(
+            parse(newYork, 'DTSTART;TZID=America/New_York:20260306T090000')
+                .startTime,
+            utc(2026, 3, 6, 14));
+        expect(
+            parse(newYork, 'DTSTART;TZID=America/New_York:20260309T090000')
+                .startTime,
+            utc(2026, 3, 9, 13));
+        expect(
+            parse(newYork, 'DTSTART;TZID="America/New_York":20261030T090000')
+                .startTime,
+            utc(2026, 10, 30, 13));
+        expect(
+            parse(newYork, 'DTSTART;TZID=America/New_York:20261102T090000')
+                .startTime,
+            utc(2026, 11, 2, 14));
+      });
+
+      test('Outlook zone in summer uses the daylight offset', () {
+        final e = IcalService.parseEvents(outlookInvite.replaceAll(
+                '20260112T', '20260715T'))
+            .single;
+        expect(e.startTime, utc(2026, 7, 15, 8));
+        expect(e.endTime, utc(2026, 7, 15, 9, 30));
+      });
+
+      test('zone without daylight saving and a half-hour offset', () {
+        const india = [
+          'BEGIN:VTIMEZONE',
+          'TZID:India Standard Time',
+          'BEGIN:STANDARD',
+          'DTSTART:16010101T000000',
+          'TZOFFSETFROM:+0530',
+          'TZOFFSETTO:+0530',
+          'END:STANDARD',
+          'END:VTIMEZONE',
+        ];
+        final e = IcalService.parseEvents(withZone(india, [
+          'DTSTART;TZID=India Standard Time:20260105T090000',
+          'DTEND;TZID=India Standard Time:20260105T100000',
+        ])).single;
+        expect(e.startTime, utc(2026, 1, 5, 3, 30));
+        expect(e.endTime, utc(2026, 1, 5, 4, 30));
+      });
+
+      test('old-style rule with BYMONTHDAY and a bare weekday', () {
+        // First Sunday in April / last Sunday in October (US before 2007).
+        const oldUs = [
+          'BEGIN:VTIMEZONE',
+          'TZID:US-Eastern',
+          'BEGIN:DAYLIGHT',
+          'DTSTART:19870405T020000',
+          'TZOFFSETFROM:-0500',
+          'TZOFFSETTO:-0400',
+          'RRULE:FREQ=YEARLY;BYMONTH=4;BYDAY=SU;BYMONTHDAY=1,2,3,4,5,6,7',
+          'END:DAYLIGHT',
+          'BEGIN:STANDARD',
+          'DTSTART:19871025T020000',
+          'TZOFFSETFROM:-0400',
+          'TZOFFSETTO:-0500',
+          'RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU',
+          'END:STANDARD',
+          'END:VTIMEZONE',
+        ];
+        // 5 April 2026 is the first Sunday in April.
+        expect(parse(oldUs, 'DTSTART;TZID=US-Eastern:20260404T120000').startTime,
+            utc(2026, 4, 4, 17));
+        expect(parse(oldUs, 'DTSTART;TZID=US-Eastern:20260406T120000').startTime,
+            utc(2026, 4, 6, 16));
+      });
+
+      test('RDATE onsets and times before the first onset', () {
+        const zone = [
+          'BEGIN:VTIMEZONE',
+          'TZID:Custom',
+          'BEGIN:STANDARD',
+          'DTSTART:20200101T000000',
+          'TZOFFSETFROM:+0300',
+          'TZOFFSETTO:+0200',
+          'RDATE:20250601T000000,20270601T000000',
+          'END:STANDARD',
+          'BEGIN:DAYLIGHT',
+          'DTSTART:20240601T000000',
+          'TZOFFSETFROM:+0200',
+          'TZOFFSETTO:+0300',
+          'END:DAYLIGHT',
+          'END:VTIMEZONE',
+        ];
+        // Before 2020: the first observance's offset-from (+3).
+        expect(parse(zone, 'DTSTART;TZID=Custom:20190105T120000').startTime,
+            utc(2019, 1, 5, 9));
+        // After the 2024 daylight onset (+3), then the 2025 RDATE (+2).
+        expect(parse(zone, 'DTSTART;TZID=Custom:20241005T120000').startTime,
+            utc(2024, 10, 5, 9));
+        expect(parse(zone, 'DTSTART;TZID=Custom:20260105T120000').startTime,
+            utc(2026, 1, 5, 10));
+      });
+
+      test('EXDATE and UNTIL follow the zone', () {
+        final e = IcalService.parseEvents(withZone(newYork, [
+          'DTSTART;TZID=America/New_York:20260105T220000',
+          'RRULE:FREQ=DAILY;UNTIL=20260108T030000Z',
+          'EXDATE;TZID=America/New_York:20260106T220000',
+        ])).single;
+        DateTime localDay(DateTime t) => DateTime(t.year, t.month, t.day);
+        expect(e.startTime, utc(2026, 1, 6, 3));
+        expect(e.excludedDates, [localDay(utc(2026, 1, 7, 3))]);
+        // UNTIL is 22:00 New York time on 7 January: that occurrence counts.
+        expect(e.recurrenceUntil, localDay(utc(2026, 1, 8, 3)));
+      });
     });
 
     test('time without seconds is accepted', () {

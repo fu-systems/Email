@@ -243,8 +243,11 @@ class MailProvider extends ChangeNotifier {
     }
 
     list.sort((a, b) {
-      final c = compare(a, b);
-      final result = c != 0 ? c : a.date.compareTo(b.date);
+      var result = compare(a, b);
+      if (result == 0) result = a.date.compareTo(b.date);
+      // Messages sent within the same second: the server's UID order is
+      // the arrival order.
+      if (result == 0) result = (a.uid ?? 0).compareTo(b.uid ?? 0);
       return _sortAscending ? result : -result;
     });
   }

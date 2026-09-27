@@ -1161,7 +1161,7 @@ class _FieldRow extends StatelessWidget {
           else
             labelWidget,
           Expanded(child: child),
-          if (trailing != null) trailing!,
+          ?trailing,
         ],
       ),
     );

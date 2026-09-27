@@ -170,7 +170,7 @@ class _ContactCard extends StatelessWidget {
           avatar: ContactAvatar(contact: contact, size: 72),
           title: contact.displayName,
           subtitles: [
-            if (jobTitle != null) jobTitle,
+            ?jobTitle,
             if (company != null && company != contact.displayName) company,
           ],
           actions: [
@@ -276,7 +276,7 @@ class _GroupCard extends StatelessWidget {
     final byId = provider.contactsById;
     final members = [
       for (final id in group.memberIds)
-        if (byId[id] case final contact?) contact,
+        ?byId[id],
     ];
     final notes = cleanText(group.notes);
     final canEmail = provider.groupAddresses(group).isNotEmpty;

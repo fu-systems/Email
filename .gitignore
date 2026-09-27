@@ -18,7 +18,6 @@ build/
 *.g.dart
 *.freezed.dart
 *.mocks.dart
-pubspec.lock
 
 # Platform
 linux/flutter/generated_plugin_registrant.cc

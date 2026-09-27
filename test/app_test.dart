@@ -124,6 +124,26 @@ void main() {
         ['Budget spreadsheet']);
   });
 
+  testWidgets('messages with the same date list newest UID first',
+      (tester) async {
+    final first = store.getMessage('acc|INBOX|1')!;
+    store.saveFullMessage(EmailMessage(
+      id: 'acc|INBOX|3',
+      accountId: 'acc',
+      folderId: first.folderId,
+      subject: 'Arrived later',
+      from: const EmailAddress(address: 'dan@example.com'),
+      date: first.date,
+      uid: 3,
+      isRead: true,
+      textBody: 'Same second.',
+      preview: 'Same second.',
+    ));
+    await pumpApp(tester);
+    expect(tester.getTopLeft(find.text('Arrived later').first).dy,
+        lessThan(tester.getTopLeft(find.text('Budget spreadsheet').first).dy));
+  });
+
   testWidgets('Ctrl+2 and Ctrl+3 switch modules', (tester) async {
     await pumpApp(tester);
     await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);

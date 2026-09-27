@@ -263,7 +263,7 @@ class _AccountHeader extends StatelessWidget {
                   ),
                 ),
               ),
-              if (status != null) status,
+              ?status,
             ],
           ),
         ),

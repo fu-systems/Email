@@ -39,6 +39,9 @@ class DataStore {
 
   static bool get isInitialized => _instance != null;
 
+  /// The folder holding the database, key and log; null for in-memory stores.
+  static String? dataDirectory;
+
   final Map<String, EmailAccount> _accounts = {};
   final Map<String, List<MailFolder>> _folders = {};
   final Map<String, List<EmailMessage>> _messages = {};
@@ -62,6 +65,7 @@ class DataStore {
   static Future<DataStore> initialize({String? directory}) async {
     final dir = directory ?? (await getApplicationSupportDirectory()).path;
     await Directory(dir).create(recursive: true);
+    dataDirectory = dir;
     AppLog.install(dir);
     final cipher = await CredentialCipher.load(File(p.join(dir, 'master.key')));
     final store = DataStore(AppDatabase.open(p.join(dir, 'look_in.db')), cipher);

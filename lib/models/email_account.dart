@@ -238,7 +238,8 @@ class EmailProviderConfig {
       smtpPort: 587,
       smtpSecurity: ConnectionSecurity.starttls,
       popHost: 'pop.gmail.com',
-      note: 'Gmail requires an app password when 2-Step Verification is on.',
+      note: 'Gmail only accepts an app password: turn on 2-Step Verification, '
+          'then create one under Google Account > Security > App passwords.',
     ),
     EmailProviderConfig(
       name: 'Outlook.com',
@@ -250,6 +251,8 @@ class EmailProviderConfig {
       smtpPort: 587,
       smtpSecurity: ConnectionSecurity.starttls,
       popHost: 'outlook.office365.com',
+      note: 'Microsoft has turned off password sign-in for Outlook.com; it '
+          'needs OAuth, which Look In does not support yet.',
     ),
     EmailProviderConfig(
       name: 'Yahoo Mail',

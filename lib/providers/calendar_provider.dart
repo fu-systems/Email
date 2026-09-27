@@ -19,9 +19,8 @@ class CalendarProvider extends ChangeNotifier {
   Timer? _reminderTimer;
   final Set<String> _remindedKeys = {};
 
-  CalendarProvider({DataStore? store, NotificationService? notifications})
-      : _store = store ?? DataStore.instance,
-        _notifications = notifications {
+  CalendarProvider({DataStore? store, this._notifications})
+      : _store = store ?? DataStore.instance {
     _viewType = CalendarViewType.values
             .asNameMap()[_store.getString('calendarView') ?? 'month'] ??
         CalendarViewType.month;

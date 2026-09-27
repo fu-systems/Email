@@ -928,7 +928,7 @@ class _MessageBodyState extends State<_MessageBody> {
               child: Html(
                 data: sanitized.html,
                 extensions: const [TableHtmlExtension()],
-                onLinkTap: (url, _, __) => _onLink(url),
+                onLinkTap: (url, _, _) => _onLink(url),
                 style: {
                   'body': Style(
                     margin: Margins.zero,

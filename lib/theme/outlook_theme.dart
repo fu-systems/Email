@@ -229,6 +229,11 @@ class OutlookTheme {
           onSecondary: textOnPrimary,
           onSurface: textPrimary,
         ),
+        // Material 2 uses titleMedium for text fields, dropdowns and list
+        // tiles; its 16px default is too large next to the 13px desktop UI.
+        textTheme: const TextTheme(
+          titleMedium: TextStyle(fontSize: 13, color: textPrimary),
+        ),
         appBarTheme: const AppBarTheme(
           backgroundColor: primaryBlue,
           foregroundColor: textOnPrimary,

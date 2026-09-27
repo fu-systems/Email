@@ -98,9 +98,10 @@ class StartupErrorApp extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 16),
-                const Text(
+                Text(
                   'The local mail database could not be opened. Make sure '
-                  'your data directory (~/.local/share/systems.fu.look_in) '
+                  'your data directory '
+                  '(${DataStore.dataDirectory ?? '~/.local/share/systems.fu.look_in'}) '
                   'is writable and not used by another running copy of '
                   'Look In.',
                 ),

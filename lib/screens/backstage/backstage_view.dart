@@ -8,6 +8,7 @@ import '../../models/email_account.dart';
 import '../../models/folder.dart';
 import '../../providers/account_provider.dart';
 import '../../providers/mail_provider.dart';
+import '../../services/data_store.dart';
 import '../../theme/outlook_theme.dart';
 import '../../widgets/common.dart';
 import '../calendar/calendar_view.dart';
@@ -41,6 +42,7 @@ class _BackstageViewState extends State<BackstageView> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Container(
             width: 190,
@@ -649,7 +651,8 @@ class _AboutPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final home = Platform.environment['HOME'] ?? '~';
+    final dataDir = DataStore.dataDirectory ??
+        '${Platform.environment['HOME'] ?? '~'}/.local/share/systems.fu.look_in';
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 760),
       child: Column(
@@ -660,18 +663,21 @@ class _AboutPage extends StatelessWidget {
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
           const SizedBox(height: 8),
           const Text(
-            'An open-source Linux email client inspired by Microsoft Outlook '
+            'A Linux email client inspired by Microsoft Outlook '
             '2013. Email over IMAP, POP3 and SMTP, calendar and contacts, with '
             'everything stored locally so you can keep working offline.',
             style: TextStyle(fontSize: 13),
           ),
           const SizedBox(height: 16),
           SelectableText(
-            'Data folder: $home/.local/share/systems.fu.look_in',
+            'Data folder: $dataDir',
             style: const TextStyle(fontSize: 12.5, color: OutlookTheme.textSecondary),
           ),
           const SizedBox(height: 8),
-          const Text('Licensed under the MIT License.',
+          const Text(
+              'Copyright (c) 2026 Functionally Unique LLC. Free for '
+              'non-commercial use under the FU License; commercial use needs '
+              'a separate license.',
               style: TextStyle(fontSize: 12.5, color: OutlookTheme.textSecondary)),
         ],
       ),

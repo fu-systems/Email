@@ -381,7 +381,7 @@ class _EventEditorDialogState extends State<EventEditorDialog> {
       },
       child: OutlookDialog(
         title: _title,
-        width: 520,
+        width: 560,
         actions: _buildActions(),
         child: Column(
           mainAxisSize: MainAxisSize.min,
