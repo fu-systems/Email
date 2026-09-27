@@ -86,6 +86,7 @@ class OutgoingMessage {
     String? lastError,
     String? draftMessageId,
     DateTime? sendAfter,
+    List<Attachment>? attachments,
   }) {
     return OutgoingMessage(
       id: id,
@@ -98,7 +99,7 @@ class OutgoingMessage {
       htmlBody: htmlBody,
       editorDelta: editorDelta,
       quotedHtml: quotedHtml,
-      attachments: attachments,
+      attachments: attachments ?? this.attachments,
       inReplyTo: inReplyTo,
       references: references,
       importance: importance,

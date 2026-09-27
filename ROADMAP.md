@@ -15,7 +15,7 @@ Phase 4: Ribbon & UI Wiring         [##########] 100%  COMPLETE
 Phase 5: Linux Platform & Build     [##########] 100%  COMPLETE
 Phase 6: Persistence & Offline      [##########] 100%  COMPLETE
 Phase 7: Advanced Features          [##########] 100%  COMPLETE
-Phase 8: Next                       [####------]  40%  IN PROGRESS  <-- current
+Phase 8: Next                       [######----]  60%  IN PROGRESS  <-- current
 ```
 
 ---
@@ -169,6 +169,8 @@ Deviations:
 | CalDAV / CardDAV sync | Calendar and contacts are local-only today |
 | Rich-text compose editor | **Done**: flutter_quill, tabbed message ribbon, inline pictures, HTML signatures |
 | Compose polish | **Done**: drag-and-drop and pasted attachments/pictures, rich paste, undo send, Delay Delivery, hunspell spell checking (as you type and F7) |
+| Mail backend interface + Microsoft Graph mail | **Done**: IMAP/SMTP and Graph behind one interface; delta sync, immutable ids, `$batch`, throttling retries, sendMail; Graph is the default for new Microsoft accounts |
+| Microsoft Graph calendar and contacts | Next: calendars and address books per Microsoft account |
 | IMAP IDLE push | Sync currently polls on each account's interval |
 | System tray icon and single-instance handling (`mailto:` links) | |
 | Flatpak / AppImage packaging | |

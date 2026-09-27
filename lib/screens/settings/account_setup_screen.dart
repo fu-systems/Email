@@ -50,6 +50,12 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
   OAuthRegistration? _oauthRegistration;
   String? _signedInAs;
 
+  /// What the current sign-in allows (Graph, or IMAP and SMTP).
+  Set<OAuthResource> _signedInResources = {};
+
+  /// Microsoft accounts: Microsoft Graph (default) or IMAP and SMTP.
+  bool _useGraph = true;
+
   /// Email address the current sign-in was made for.
   String? _signedInFor;
   bool _signedInHere = false;
@@ -77,6 +83,14 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
 
   bool get _isEditMode => _editing != null;
 
+  bool get _microsoft =>
+      _useOAuth && _oauthProvider == OAuthProviderConfig.microsoftId;
+
+  bool get _graphChosen => _microsoft && _useGraph;
+
+  OAuthResource get _neededResource =>
+      _graphChosen ? OAuthResource.graph : OAuthResource.outlookMail;
+
   /// The id the account will have, fixed for the whole wizard so that a
   /// sign-in made before saving belongs to it.
   String get _accountId =>
@@ -103,7 +117,9 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
     _editing = a;
     _emailController.text = a.emailAddress;
     _displayNameController.text = a.displayName;
-    _protocol = a.protocol;
+    // Graph accounts keep IMAP server settings to fall back to.
+    _protocol = a.isGraph ? IncomingProtocol.imap : a.protocol;
+    _useGraph = a.isGraph;
     _incomingHostController.text = a.incomingHost;
     _incomingPortController.text = '${a.incomingPort}';
     _incomingSecurity = a.incomingSecurity;
@@ -131,6 +147,9 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
       if (grant != null) {
         _signedInAs = grant.username ?? a.emailAddress;
         _signedInFor = a.emailAddress;
+        _signedInResources = grant.resources.isEmpty
+            ? {a.isGraph ? OAuthResource.graph : OAuthResource.outlookMail}
+            : {...grant.resources};
       }
     }
   }
@@ -231,12 +250,14 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
 
   Future<void> _signInWithMicrosoft() async {
     final email = _emailController.text.trim();
+    final resource = _neededResource;
     final result = await signInWithMicrosoft(context,
-        store: DataStore.instance, loginHint: email);
+        store: DataStore.instance, loginHint: email, resource: resource);
     if (result == null || !mounted) return;
     TokenManager.instance.saveSignIn(_accountId, result.tokens,
-        resource: OAuthResource.outlookMail);
+        resource: resource);
     setState(() {
+      _signedInResources = {resource};
       _oauthRegistration = result.registration;
       _signedInAs = result.tokens.username ?? email;
       _signedInFor = email;
@@ -255,6 +276,10 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
     if (_useOAuth && _signedInAs == null) {
       return 'Sign in with Microsoft to continue.';
     }
+    if (_microsoft && !_signedInResources.contains(_neededResource)) {
+      return 'Sign in with Microsoft again so Look In may use '
+          '${_graphChosen ? 'Microsoft Graph' : 'IMAP and SMTP'}.';
+    }
     return null;
   }
 
@@ -268,7 +293,7 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
       id: _accountId,
       displayName: name.isNotEmpty ? name : email,
       emailAddress: email,
-      protocol: _protocol,
+      protocol: _graphChosen ? IncomingProtocol.graph : _protocol,
       incomingHost: _incomingHostController.text.trim(),
       incomingPort: int.tryParse(_incomingPortController.text.trim()) ??
           _protocol.defaultPort(_incomingSecurity),
@@ -691,7 +716,51 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
     );
   }
 
+  /// Microsoft accounts: how mail is synced.
+  Widget _microsoftConnection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('Connect with:', style: TextStyle(fontSize: 13)),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            SegmentedButton<bool>(
+              segments: const [
+                ButtonSegment(value: true, label: Text('Microsoft Graph')),
+                ButtonSegment(value: false, label: Text('IMAP and SMTP')),
+              ],
+              selected: {_useGraph},
+              showSelectedIcon: false,
+              onSelectionChanged: (s) => setState(() {
+                _useGraph = s.first;
+                _testError = null;
+                _testSuccess = false;
+              }),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Text(
+          _useGraph
+              ? 'Recommended. Mail syncs over HTTPS with Microsoft Graph, '
+                    'which also sends mail where SMTP sign-in is turned off. '
+                    'No server settings are needed.'
+              : 'For app registrations without Microsoft Graph permissions. '
+                    'Outlook.com and Microsoft 365 use '
+                    'outlook.office365.com for both servers.',
+          style: const TextStyle(
+            fontSize: 12,
+            color: OutlookTheme.textSecondary,
+          ),
+        ),
+        const SizedBox(height: 16),
+      ],
+    );
+  }
+
   Widget _serverFields() {
+    if (_graphChosen) return _microsoftConnection();
     Widget securityDropdown(
             ConnectionSecurity value, ValueChanged<ConnectionSecurity> onChanged) =>
         SizedBox(
@@ -719,13 +788,14 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (_microsoft) _microsoftConnection(),
         Row(
           children: [
             const Text('Account Type:', style: TextStyle(fontSize: 13)),
             const SizedBox(width: 12),
             SegmentedButton<IncomingProtocol>(
               segments: [
-                for (final p in IncomingProtocol.values)
+                for (final p in IncomingProtocol.serverProtocols)
                   ButtonSegment(
                     value: p,
                     label: Text(p.label),
@@ -904,11 +974,18 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (signedIn)
+        if (signedIn && _credentialProblem() != null)
+          _Banner(
+            icon: Icons.warning_amber,
+            color: OutlookTheme.draftColor,
+            text: 'Signed in as $_signedInAs. ${_credentialProblem()}',
+          )
+        else if (signedIn)
           _Banner(
             icon: Icons.check_circle,
             color: OutlookTheme.calendarEventGreen,
-            text: 'Signed in with Microsoft as $_signedInAs.',
+            text: 'Signed in with Microsoft as $_signedInAs'
+                '${_microsoft ? ' (${_graphChosen ? 'Microsoft Graph' : 'IMAP and SMTP'})' : ''}.',
           ),
         const SizedBox(height: 12),
         Wrap(
@@ -1029,10 +1106,14 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
         ),
         const SizedBox(height: 20),
         _summaryRow('Email', _emailController.text),
-        _summaryRow(_protocol.label,
-            '${_incomingHostController.text}:${_incomingPortController.text} (${_incomingSecurity.label})'),
-        _summaryRow('SMTP',
-            '${_smtpHostController.text}:${_smtpPortController.text} (${_smtpSecurity.label})'),
+        if (_graphChosen)
+          _summaryRow('Mail', 'Microsoft Graph (receiving and sending)')
+        else ...[
+          _summaryRow(_protocol.label,
+              '${_incomingHostController.text}:${_incomingPortController.text} (${_incomingSecurity.label})'),
+          _summaryRow('SMTP',
+              '${_smtpHostController.text}:${_smtpPortController.text} (${_smtpSecurity.label})'),
+        ],
         if (_useOAuth)
           _summaryRow('Sign-in', 'Microsoft account (${_signedInAs ?? 'not signed in'})')
         else

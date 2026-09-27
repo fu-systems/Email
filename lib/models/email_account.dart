@@ -80,6 +80,9 @@ class EmailAccount {
 
   bool get isPop3 => protocol == IncomingProtocol.pop3;
 
+  /// Mail goes through Microsoft Graph instead of IMAP and SMTP.
+  bool get isGraph => protocol == IncomingProtocol.graph;
+
   bool get usesOAuth => authMethod == AuthMethod.oauth2;
 
   /// "Name <address>" form used for the From header.
@@ -221,9 +224,20 @@ enum AuthMethod {
 
 enum IncomingProtocol {
   imap,
-  pop3;
+  pop3,
 
-  String get label => this == IncomingProtocol.imap ? 'IMAP' : 'POP3';
+  /// Microsoft Graph (HTTPS) for mail in both directions; Outlook.com and
+  /// Microsoft 365 accounts that signed in with Microsoft.
+  graph;
+
+  String get label => switch (this) {
+        IncomingProtocol.imap => 'IMAP',
+        IncomingProtocol.pop3 => 'POP3',
+        IncomingProtocol.graph => 'Microsoft Graph',
+      };
+
+  /// Protocols set up with server names and ports.
+  static const serverProtocols = [IncomingProtocol.imap, IncomingProtocol.pop3];
 
   int defaultPort(ConnectionSecurity security) {
     switch (this) {
@@ -231,6 +245,8 @@ enum IncomingProtocol {
         return security == ConnectionSecurity.ssl ? 993 : 143;
       case IncomingProtocol.pop3:
         return security == ConnectionSecurity.ssl ? 995 : 110;
+      case IncomingProtocol.graph:
+        return 443;
     }
   }
 }

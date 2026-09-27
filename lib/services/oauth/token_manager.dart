@@ -140,8 +140,11 @@ class TokenManager {
   /// Throws [MailAuthenticationException] when the user must sign in again,
   /// and [MailConnectionException] when the sign-in server can't be reached.
   Future<String> accessToken(EmailAccount account,
-      {OAuthResource resource = OAuthResource.outlookMail}) {
+      {OAuthResource resource = OAuthResource.outlookMail,
+      bool forceRefresh = false}) {
     final key = '${account.id}|${resource.name}';
+    // A token the server just rejected (e.g. revoked early) is dropped.
+    if (forceRefresh) _access.remove(key);
     final cached = _access[key];
     if (cached != null &&
         cached.expiresAt.isAfter(_now().add(refreshMargin))) {

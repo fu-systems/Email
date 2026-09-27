@@ -38,6 +38,9 @@ class EmailMessage {
   /// POP3 unique id (UIDL) for messages from POP3 accounts.
   final String? popUid;
 
+  /// Server id of the message where it isn't an IMAP UID (Microsoft Graph).
+  final String? remoteId;
+
   /// Size of the message on the server in bytes, when known.
   final int? size;
 
@@ -70,7 +73,11 @@ class EmailMessage {
     this.sequenceNumber,
     this.popUid,
     this.size,
+    this.remoteId,
   });
+
+  /// How the server knows this message: the Graph id or the IMAP UID.
+  String? get serverRef => remoteId ?? uid?.toString();
 
   /// Whether the full body has been downloaded.
   bool get hasBody => textBody != null || htmlBody != null;
@@ -118,6 +125,7 @@ class EmailMessage {
     int? sequenceNumber,
     String? popUid,
     int? size,
+    String? remoteId,
   }) {
     return EmailMessage(
       id: id ?? this.id,
@@ -148,6 +156,7 @@ class EmailMessage {
       sequenceNumber: sequenceNumber ?? this.sequenceNumber,
       popUid: popUid ?? this.popUid,
       size: size ?? this.size,
+      remoteId: remoteId ?? this.remoteId,
     );
   }
 
@@ -181,6 +190,7 @@ class EmailMessage {
         'sequenceNumber': sequenceNumber,
         'popUid': popUid,
         'size': size,
+        'remoteId': ?remoteId,
       };
 
   factory EmailMessage.fromMap(Map<String, dynamic> map) => EmailMessage(
@@ -217,6 +227,7 @@ class EmailMessage {
         sequenceNumber: map['sequenceNumber'] as int?,
         popUid: map['popUid'] as String?,
         size: map['size'] as int?,
+        remoteId: map['remoteId'] as String?,
       );
 
   static List<EmailAddress> _addressList(Object? raw) =>

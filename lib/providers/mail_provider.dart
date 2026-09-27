@@ -12,6 +12,8 @@ import '../models/email_message.dart';
 import '../models/folder.dart';
 import '../models/mail_rule.dart';
 import '../models/outgoing_message.dart';
+import '../services/backends/graph_mail_backend.dart';
+import '../services/backends/remote_mail_backend.dart';
 import '../services/data_store.dart';
 import '../services/mail_backend.dart';
 import '../services/mime_converter.dart';
@@ -55,7 +57,7 @@ enum SendResult { sent, queued, scheduled, failed }
 class MailProvider extends ChangeNotifier {
   final DataStore _store;
   final NotificationService notifications;
-  final Map<String, ImapBackend> _imap = {};
+  final Map<String, RemoteMailBackend> _remote = {};
   final Map<String, Pop3Backend> _pop = {};
   final Map<String, AccountConnection> _connection = {};
   final Map<String, String> _accountErrors = {};
@@ -362,6 +364,12 @@ class MailProvider extends ChangeNotifier {
       final before = previous[account.id];
       final changed = before == null ||
           jsonEncode(before.toMap()) != jsonEncode(account.toMap());
+      if (before != null && before.protocol != account.protocol) {
+        // E.g. upgraded from IMAP to Microsoft Graph: server references
+        // and queued changes of the old protocol mean nothing any more.
+        _savePending(
+            _loadPending().where((o) => o.accountId != account.id).toList());
+      }
       if (changed) {
         _dropBackend(account.id);
         if (account.isPop3) _ensureLocalFolders(account);
@@ -376,8 +384,8 @@ class MailProvider extends ChangeNotifier {
   }
 
   void _dropBackend(String accountId) {
-    final imap = _imap.remove(accountId);
-    if (imap != null) unawaited(imap.disconnect());
+    final remote = _remote.remove(accountId);
+    if (remote != null) unawaited(remote.disconnect());
     _pop.remove(accountId);
     _connection.remove(accountId);
     _accountErrors.remove(accountId);
@@ -436,8 +444,13 @@ class MailProvider extends ChangeNotifier {
     }
   }
 
-  ImapBackend _imapFor(EmailAccount account) =>
-      _imap.putIfAbsent(account.id, () => ImapBackend(account));
+  /// The account's server: Microsoft Graph, or IMAP with SMTP.
+  RemoteMailBackend _remoteFor(EmailAccount account) =>
+      _remote.putIfAbsent(
+          account.id,
+          () => account.isGraph
+              ? GraphMailBackend(account)
+              : ImapMailBackend(account));
 
   Pop3Backend _popFor(EmailAccount account) =>
       _pop.putIfAbsent(account.id, () => Pop3Backend(account));
@@ -449,7 +462,7 @@ class MailProvider extends ChangeNotifier {
       if (account.isPop3) {
         await _popFor(account).checkConnection();
       } else {
-        await _imapFor(account).connect();
+        await _remoteFor(account).connect();
       }
       _setOnline(account.id);
       await syncAccount(account.id);
@@ -522,7 +535,7 @@ class MailProvider extends ChangeNotifier {
       if (account.isPop3) {
         await _syncPop(account);
       } else {
-        await _syncImap(account, full: full);
+        await _syncRemote(account, full: full);
       }
       _setOnline(accountId);
       _lastSync = DateTime.now();
@@ -537,15 +550,10 @@ class MailProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> _syncImap(EmailAccount account, {required bool full}) async {
-    final backend = _imapFor(account);
-    final previous = {for (final f in _store.getFolders(account.id)) f.path: f};
-    final remote = await backend.fetchFolders();
-    // Keep UIDVALIDITY from the previous sync; it is refreshed per folder.
-    final merged = remote
-        .map((f) => f.copyWith(uidValidity: previous[f.path]?.uidValidity))
-        .toList();
-    _store.saveFolders(account.id, merged);
+  Future<void> _syncRemote(EmailAccount account, {required bool full}) async {
+    final backend = _remoteFor(account);
+    final folders = await backend.fetchFolders(_store.getFolders(account.id));
+    _store.saveFolders(account.id, folders);
     if (_selectedFolder?.accountId == account.id) {
       _selectedFolder =
           _store.getFolder(_selectedFolder!.id) ?? _selectedFolder;
@@ -570,42 +578,27 @@ class MailProvider extends ChangeNotifier {
       }
     }
     for (final folder in toSync) {
-      await _syncImapFolder(account, folder);
+      await _syncRemoteFolder(account, folder);
     }
   }
 
-  Future<void> _syncImapFolder(EmailAccount account, MailFolder folder) async {
-    final backend = _imapFor(account);
+  Future<void> _syncRemoteFolder(EmailAccount account, MailFolder folder) async {
+    final backend = _remoteFor(account);
     final cached = _store.getMessages(folder.id);
-    final firstSync = cached.isEmpty && folder.uidValidity == null;
-    final cachedUids = cached.map((m) => m.uid).whereType<int>().toSet();
-    final snapshot =
-        await backend.syncFolder(folder, cachedUids: cachedUids);
-
-    if (snapshot.uidValidityChanged) {
-      _store.removeMessages(folder.id, cached.map((m) => m.id));
-    } else if (snapshot.messages.isNotEmpty) {
-      final minUid = snapshot.messages
-          .map((m) => m.uid!)
-          .reduce((a, b) => a < b ? a : b);
-      // Drop cached messages deleted on the server, and local placeholders
-      // (moved while offline) that the server listing now replaces.
-      final removed = cached
-          .where((m) =>
-              m.uid == null ||
-              (m.uid! >= minUid && !snapshot.existingUids.contains(m.uid)))
-          .map((m) => m.id)
-          .toList();
-      _store.removeMessages(folder.id, removed);
-    } else if (snapshot.folder.totalCount == 0) {
-      _store.removeMessages(folder.id, cached.map((m) => m.id));
-    }
+    final firstSync = cached.isEmpty &&
+        folder.uidValidity == null &&
+        folder.syncState == null;
+    final cachedIds = {for (final m in cached) m.id};
+    final snapshot = await backend.syncFolder(folder, cached);
+    // Deleted on the server (or all of them when the cache is stale).
+    _store.removeMessages(folder.id,
+        snapshot.reset ? cachedIds : snapshot.removedIds);
 
     final downloaded = {for (final d in snapshot.downloads) d.message.id: d};
     final newMessages = <EmailMessage>[];
     final headerOnly = <EmailMessage>[];
     for (final m in snapshot.messages) {
-      final isNew = !cachedUids.contains(m.uid) || snapshot.uidValidityChanged;
+      final isNew = !cachedIds.contains(m.id) || snapshot.reset;
       final download = downloaded[m.id];
       if (download != null) {
         // Keep the header fetch's flags (the body fetch may predate them).
@@ -742,16 +735,11 @@ class MailProvider extends ChangeNotifier {
     final account = accountById(folder.accountId);
     if (account == null || !_canUseNetwork(account.id)) return;
     final cached = _store.getMessages(folder.id);
-    final oldest = cached
-        .map((m) => m.uid)
-        .whereType<int>()
-        .fold<int?>(null, (a, b) => a == null || b < a ? b : a);
-    if (oldest == null) return;
+    if (!cached.any((m) => m.serverRef != null)) return;
     _isLoadingOlder = true;
     _notify();
     try {
-      final snapshot =
-          await _imapFor(account).fetchOlder(folder, oldestUid: oldest);
+      final snapshot = await _remoteFor(account).fetchOlder(folder, cached);
       if (snapshot.messages.isEmpty) _noOlderMessages.add(folder.id);
       final downloaded = {for (final d in snapshot.downloads) d.message.id: d};
       final headerOnly = <EmailMessage>[];
@@ -797,7 +785,7 @@ class MailProvider extends ChangeNotifier {
       _isLoading = _store.getMessages(folder.id).isEmpty;
       _notify();
       try {
-        await _syncImapFolder(account, folder);
+        await _syncRemoteFolder(account, folder);
         _setOnline(account.id);
       } catch (e) {
         _handleAccountError(account.id, e);
@@ -820,7 +808,7 @@ class MailProvider extends ChangeNotifier {
     _notify();
     try {
       await _flushOutbox(account.id);
-      await _syncImapFolder(account, folder);
+      await _syncRemoteFolder(account, folder);
       _setOnline(account.id);
     } catch (e) {
       _handleAccountError(account.id, e);
@@ -846,7 +834,8 @@ class MailProvider extends ChangeNotifier {
       ));
     } else {
       _requireOnline(accountId);
-      final folder = await _imapFor(account).createFolder(clean, parent: parent);
+      final folder =
+          await _remoteFor(account).createFolder(clean, parent: parent);
       _store.updateFolder(folder);
     }
     _notify();
@@ -880,7 +869,7 @@ class MailProvider extends ChangeNotifier {
       _store.removeFolder(folder);
     } else {
       _requireOnline(account.id);
-      renamed = await _imapFor(account).renameFolder(folder, newName.trim());
+      renamed = await _remoteFor(account).renameFolder(folder, newName.trim());
       await syncAccount(account.id);
     }
     if (_selectedFolder?.id == folder.id) _selectedFolder = renamed;
@@ -895,7 +884,7 @@ class MailProvider extends ChangeNotifier {
     }
     if (!account.isPop3) {
       _requireOnline(account.id);
-      await _imapFor(account).deleteFolder(folder);
+      await _remoteFor(account).deleteFolder(folder);
     }
     _store.removeFolder(folder);
     if (_selectedFolder?.id == folder.id) _selectDefaultFolder();
@@ -944,7 +933,7 @@ class MailProvider extends ChangeNotifier {
     final name = names[type];
     if (name == null) return null;
     try {
-      final created = await _imapFor(account).createFolder(name);
+      final created = await _remoteFor(account).createFolder(name);
       final folder = created.copyWith(type: type);
       _store.updateFolder(folder);
       _notify();
@@ -1047,7 +1036,8 @@ class MailProvider extends ChangeNotifier {
     if (!_canUseNetwork(account.id) || !_loadingBodies.add(message.id)) return;
     _notify();
     try {
-      final download = await _imapFor(account).fetchFullMessage(folder, message);
+      final download =
+          await _remoteFor(account).fetchFullMessage(folder, message);
       if (download != null) {
         final current = _store.getMessage(message.id) ?? message;
         final full = download.message.copyWith(
@@ -1234,13 +1224,13 @@ class MailProvider extends ChangeNotifier {
 
       final account = accountById(folder.accountId);
       if (account == null || account.isPop3) continue;
-      final uids = updated.map((m) => m.uid).whereType<int>().toList();
-      if (uids.isEmpty) continue;
+      final refs = updated.map((m) => m.serverRef).whereType<String>().toList();
+      if (refs.isEmpty) continue;
       final op = _PendingOp(
         type: 'flags',
         accountId: account.id,
         folderPath: folder.path,
-        uids: uids,
+        ids: refs,
         args: {'seen': read, 'flagged': flagged, 'answered': answered},
       );
       await _runOrQueue(account, op);
@@ -1291,15 +1281,15 @@ class MailProvider extends ChangeNotifier {
       _recountLocal(account.id);
       return;
     }
-    final uids = msgs.map((m) => m.uid).whereType<int>().toList();
-    if (uids.isEmpty) return;
+    final refs = msgs.map((m) => m.serverRef).whereType<String>().toList();
+    if (refs.isEmpty) return;
     await _runOrQueue(
       account,
       _PendingOp(
           type: 'expunge',
           accountId: account.id,
           folderPath: folder.path,
-          uids: uids),
+          ids: refs),
     );
   }
 
@@ -1328,37 +1318,36 @@ class MailProvider extends ChangeNotifier {
         totalCount: (source.totalCount - list.length).clamp(0, 1 << 30),
       ));
 
-      Map<int, int> uidMap = const {};
+      Map<String, String> refMap = const {};
       if (!account.isPop3) {
-        final uids = list.map((m) => m.uid).whereType<int>().toList();
-        if (uids.isNotEmpty) {
+        final refs = list.map((m) => m.serverRef).whereType<String>().toList();
+        if (refs.isNotEmpty) {
           final op = _PendingOp(
-          type: 'move',
-          accountId: account.id,
-          folderPath: source.path,
-          uids: uids,
+            type: 'move',
+            accountId: account.id,
+            folderPath: source.path,
+            ids: refs,
             args: {'target': target.path},
           );
-          uidMap = await _runOrQueue(account, op) ?? const {};
+          refMap = await _runOrQueue(account, op) ?? const {};
         }
       }
 
       for (final m in full) {
-        final newUid = m.uid == null ? null : uidMap[m.uid!];
+        final ref = m.serverRef;
+        final newRef = ref == null ? null : refMap[ref];
         final String newId;
         if (account.isPop3) {
           newId = '${target.id}|${m.popUid != null ? 'pop:${m.popUid}' : _uuid.v4()}';
-        } else if (newUid != null) {
-          newId = '${account.id}|${target.path}|$newUid';
+        } else if (newRef != null) {
+          newId = _remoteFor(account).messageId(target, newRef);
         } else {
           newId = '${target.id}|local-${_uuid.v4()}';
         }
-        final moved = EmailMessage.fromMap({
-          ...m.toMap(),
-          'id': newId,
-          'folderId': target.id,
-          'uid': account.isPop3 ? null : newUid,
-        });
+        final rebased = account.isPop3
+            ? EmailMessage.fromMap({...m.toMap(), 'uid': null})
+            : _remoteFor(account).withRef(m, newRef);
+        final moved = rebased.copyWith(id: newId, folderId: target.id);
         _store.saveFullMessage(moved, source: sources[m.id]);
       }
       final latestTarget = _store.getFolder(target.id) ?? target;
@@ -1388,8 +1377,9 @@ class MailProvider extends ChangeNotifier {
   int get pendingOperationCount => _loadPending().length;
 
   /// Runs [op] against the server, or queues it when the account is
-  /// offline. Returns the operation's result (UID map for moves).
-  Future<Map<int, int>?> _runOrQueue(EmailAccount account, _PendingOp op) async {
+  /// offline. Returns the operation's result (new references for moves).
+  Future<Map<String, String>?> _runOrQueue(
+      EmailAccount account, _PendingOp op) async {
     final offline = !_canUseNetwork(account.id) ||
         connectionOf(account.id) == AccountConnection.offline;
     if (offline) {
@@ -1407,7 +1397,8 @@ class MailProvider extends ChangeNotifier {
     }
   }
 
-  Future<Map<int, int>?> _execute(EmailAccount account, _PendingOp op) async {
+  Future<Map<String, String>?> _execute(
+      EmailAccount account, _PendingOp op) async {
     final folder = folderByPath(account.id, op.folderPath) ??
         MailFolder(
           id: MailFolder.makeId(account.id, op.folderPath),
@@ -1415,19 +1406,19 @@ class MailProvider extends ChangeNotifier {
           name: op.folderPath,
           path: op.folderPath,
         );
-    final backend = _imapFor(account);
+    final backend = _remoteFor(account);
     switch (op.type) {
       case 'flags':
         await backend.setFlags(
           folder,
-          op.uids,
+          op.ids,
           seen: op.args['seen'] as bool?,
           flagged: op.args['flagged'] as bool?,
           answered: op.args['answered'] as bool?,
         );
         return null;
       case 'expunge':
-        await backend.expungeMessages(folder, op.uids);
+        await backend.deleteMessages(folder, op.ids);
         return null;
       case 'move':
         final targetPath = op.args['target'] as String;
@@ -1438,7 +1429,7 @@ class MailProvider extends ChangeNotifier {
               name: targetPath,
               path: targetPath,
             );
-        return backend.moveMessages(folder, target, op.uids);
+        return backend.moveMessages(folder, target, op.ids);
     }
     return null;
   }
@@ -1514,7 +1505,11 @@ class MailProvider extends ChangeNotifier {
   }) async {
     final mime = await MimeConverter.buildMimeMessage(message, account,
         calendarPart: calendarPart);
-    await SmtpSender.send(account, mime, message.allRecipients);
+    if (account.isPop3) {
+      await SmtpSender.send(account, mime, message.allRecipients);
+    } else {
+      await _remoteFor(account).send(mime, message);
+    }
 
     // File a copy in Sent Items (with Bcc, which was not transmitted).
     if (message.bcc.isNotEmpty) {
@@ -1561,7 +1556,9 @@ class MailProvider extends ChangeNotifier {
     OutgoingMessage message, {
     required bool seen,
   }) async {
-    if (type == FolderType.sent && !account.isPop3 && _serverSavesSent(account)) {
+    if (type == FolderType.sent &&
+        !account.isPop3 &&
+        (_remoteFor(account).savesSentCopy || _serverSavesSent(account))) {
       return;
     }
     final folder = folderByType(account.id, type) ??
@@ -1581,12 +1578,10 @@ class MailProvider extends ChangeNotifier {
       return;
     }
     try {
-      await _imapFor(account).appendMessage(folder, raw, flags: [
-        if (seen) r'\Seen',
-        if (type == FolderType.drafts) r'\Draft',
-      ]);
+      await _remoteFor(account).appendMessage(folder, raw,
+          seen: seen, draft: type == FolderType.drafts);
       if (_selectedFolder?.id == folder.id) {
-        unawaited(_syncImapFolder(account, folder).catchError((_) {}));
+        unawaited(_syncRemoteFolder(account, folder).catchError((_) {}));
       }
     } catch (e) {
       debugPrint('Could not save copy to ${folder.name}: $e');
@@ -1633,26 +1628,26 @@ class MailProvider extends ChangeNotifier {
       }
     }
 
-    int? uid;
-    if (!account.isPop3 && _canUseNetwork(account.id)) {
+    String? ref;
+    final backend = account.isPop3 ? null : _remoteFor(account);
+    if (backend != null && _canUseNetwork(account.id)) {
       try {
-        uid = await _imapFor(account)
-            .appendMessage(drafts, raw, flags: [r'\Seen', r'\Draft']);
+        ref = await backend.appendMessage(drafts, raw, seen: true, draft: true);
       } catch (e) {
         debugPrint('Saving draft on server failed: $e');
       }
     }
-    final id = uid != null
-        ? '${account.id}|${drafts.path}|$uid'
+    final id = ref != null
+        ? backend!.messageId(drafts, ref)
         : '${drafts.id}|local-${_uuid.v4()}';
-    final parsed = MimeConverter.toEmailMessage(
+    var parsed = MimeConverter.toEmailMessage(
       MimeConverter.parse(raw),
       id: id,
       accountId: account.id,
       folderId: drafts.id,
-      uid: uid,
       isRead: true,
     ).copyWith(isDraft: true);
+    if (ref != null) parsed = backend!.withRef(parsed, ref);
     _store.saveFullMessage(parsed, source: source);
     if (account.isPop3) _recountLocal(account.id);
     _notify();
@@ -1924,17 +1919,13 @@ class MailProvider extends ChangeNotifier {
         if (account == null || account.isPop3 || !_canUseNetwork(account.id)) {
           continue;
         }
-        final backend = _imapFor(account);
-        final uids = await backend.search(folder, query);
-        final cached = {
-          for (final m in _store.getMessages(folder.id))
-            if (m.uid != null) m.uid!: m,
-        };
-        final missing = uids.where((u) => !cached.containsKey(u)).take(100).toList();
-        results.addAll(uids.where(cached.containsKey).map((u) => cached[u]!));
-        final fetched = await backend.fetchHeaders(folder, missing);
-        _store.putMessages(folder.id, fetched);
-        results.addAll(fetched);
+        final cached = _store.getMessages(folder.id);
+        final cachedIds = {for (final m in cached) m.id};
+        final found =
+            await _remoteFor(account).search(folder, query, cached);
+        _store.putMessages(folder.id,
+            found.where((m) => !cachedIds.contains(m.id)).toList());
+        results.addAll(found);
       }
       if (_searchQuery.trim() == query) _serverResults = results;
     } catch (e) {
@@ -1985,10 +1976,10 @@ class MailProvider extends ChangeNotifier {
         unawaited(_connectAndSync(a));
       }
     } else {
-      for (final backend in _imap.values) {
+      for (final backend in _remote.values) {
         unawaited(backend.disconnect());
       }
-      _imap.clear();
+      _remote.clear();
     }
     _notify();
   }
@@ -2045,7 +2036,7 @@ class MailProvider extends ChangeNotifier {
     _accountSource?.removeListener(_onAccountsChanged);
     _syncTimer?.cancel();
     _outboxTimer?.cancel();
-    for (final backend in _imap.values) {
+    for (final backend in _remote.values) {
       unawaited(backend.disconnect());
     }
     unawaited(notifications.close());
@@ -2058,14 +2049,16 @@ class _PendingOp {
   final String type;
   final String accountId;
   final String folderPath;
-  final List<int> uids;
+
+  /// Server references of the messages (IMAP UIDs or Graph ids).
+  final List<String> ids;
   final Map<String, dynamic> args;
 
   const _PendingOp({
     required this.type,
     required this.accountId,
     required this.folderPath,
-    required this.uids,
+    required this.ids,
     this.args = const {},
   });
 
@@ -2073,7 +2066,7 @@ class _PendingOp {
         'type': type,
         'accountId': accountId,
         'folderPath': folderPath,
-        'uids': uids,
+        'ids': ids,
         'args': args,
       };
 
@@ -2081,7 +2074,10 @@ class _PendingOp {
         type: map['type'] as String,
         accountId: map['accountId'] as String,
         folderPath: map['folderPath'] as String,
-        uids: (map['uids'] as List).cast<int>(),
+        // Queued by older versions as IMAP UIDs.
+        ids: map['ids'] != null
+            ? (map['ids'] as List).cast<String>()
+            : [for (final uid in (map['uids'] as List? ?? const [])) '$uid'],
         args: (map['args'] as Map?)?.cast<String, dynamic>() ?? const {},
       );
 }

@@ -129,10 +129,13 @@ class _SignInProblems extends StatelessWidget {
 
   Future<void> _signInAgain(BuildContext context, EmailAccount account) async {
     final mail = context.read<MailProvider>();
+    final resource =
+        account.isGraph ? OAuthResource.graph : OAuthResource.outlookMail;
     final result = await signInWithMicrosoft(
       context,
       store: mail.store,
       loginHint: account.emailAddress,
+      resource: resource,
       registration: account.oauthClientId == null
           ? null
           : OAuthRegistration(
@@ -141,7 +144,7 @@ class _SignInProblems extends StatelessWidget {
     );
     if (result == null) return;
     TokenManager.instance.saveSignIn(account.id, result.tokens,
-        resource: OAuthResource.outlookMail);
+        resource: resource);
     await mail.syncAccount(account.id, full: true);
   }
 

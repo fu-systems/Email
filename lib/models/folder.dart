@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
 
-/// Represents a mailbox folder (IMAP mailbox, or the POP3 inbox).
+/// Represents a mailbox folder (IMAP mailbox, Microsoft Graph mail folder,
+/// or the POP3 inbox).
+///
+/// [path] is the IMAP path; for Graph folders it is the display path
+/// ("Inbox/Projects"), so the folder tree, move dialogs and rules work the
+/// same, and [remoteId] holds the Graph folder id.
 class MailFolder {
   final String id;
   final String accountId;
@@ -22,6 +27,12 @@ class MailFolder {
   /// IMAP UIDVALIDITY; when it changes all cached UIDs are invalid.
   final int? uidValidity;
 
+  /// Server id of the folder where the path isn't one (Microsoft Graph).
+  final String? remoteId;
+
+  /// Where incremental sync continues (a Graph delta link).
+  final String? syncState;
+
   const MailFolder({
     required this.id,
     required this.accountId,
@@ -36,6 +47,8 @@ class MailFolder {
     this.delimiter = '/',
     this.isSelectable = true,
     this.uidValidity,
+    this.remoteId,
+    this.syncState,
   });
 
   /// Stable id for a folder of an account.
@@ -82,6 +95,9 @@ class MailFolder {
     String? delimiter,
     bool? isSelectable,
     int? uidValidity,
+    String? remoteId,
+    String? syncState,
+    bool clearSyncState = false,
   }) {
     return MailFolder(
       id: id ?? this.id,
@@ -97,6 +113,8 @@ class MailFolder {
       delimiter: delimiter ?? this.delimiter,
       isSelectable: isSelectable ?? this.isSelectable,
       uidValidity: uidValidity ?? this.uidValidity,
+      remoteId: remoteId ?? this.remoteId,
+      syncState: clearSyncState ? null : syncState ?? this.syncState,
     );
   }
 
@@ -136,6 +154,8 @@ class MailFolder {
         'delimiter': delimiter,
         'isSelectable': isSelectable ? 1 : 0,
         'uidValidity': uidValidity,
+        'remoteId': ?remoteId,
+        'syncState': ?syncState,
       };
 
   factory MailFolder.fromMap(Map<String, dynamic> map) => MailFolder(
@@ -152,6 +172,8 @@ class MailFolder {
         delimiter: map['delimiter'] as String? ?? '/',
         isSelectable: (map['isSelectable'] as int? ?? 1) == 1,
         uidValidity: map['uidValidity'] as int?,
+        remoteId: map['remoteId'] as String?,
+        syncState: map['syncState'] as String?,
       );
 
   /// Try to detect folder type from its name/path.

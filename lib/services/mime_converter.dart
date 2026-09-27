@@ -310,6 +310,10 @@ class MimeConverter {
   static enough.MimeMessage parse(String raw) =>
       enough.MimeMessage.parseFromText(raw);
 
+  /// Parses a message downloaded as bytes (e.g. from Microsoft Graph).
+  static enough.MimeMessage parseBytes(Uint8List raw) =>
+      enough.MimeMessage.parseFromData(raw);
+
   /// Raw bytes of a fetched message, for storing as the message source.
   static Uint8List sourceBytes(enough.MimeMessage msg) {
     final data = msg.mimeData;

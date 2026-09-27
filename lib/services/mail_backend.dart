@@ -11,6 +11,7 @@ import 'package:enough_mail/src/private/smtp/smtp_command.dart' as smtp;
 import '../models/email_account.dart';
 import '../models/email_message.dart';
 import '../models/folder.dart';
+import 'backends/graph_mail_backend.dart';
 import 'mime_converter.dart';
 import 'oauth/token_manager.dart';
 
@@ -954,6 +955,15 @@ String explainMicrosoftError(String message) {
 /// Tests incoming and outgoing settings of [account]. Returns null on
 /// success or a user-readable error message.
 Future<String?> testAccountConnection(EmailAccount account) async {
+  if (account.isGraph) {
+    // One service for receiving and sending.
+    try {
+      await GraphMailBackend(account).connect();
+      return null;
+    } catch (e) {
+      return 'Microsoft Graph: $e';
+    }
+  }
   try {
     if (account.isPop3) {
       await Pop3Backend(account).checkConnection();

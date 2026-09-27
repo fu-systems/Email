@@ -17,7 +17,7 @@ Microsoft Outlook 2013, built with Flutter.
 
 **Mail**
 - IMAP and POP3 for receiving and SMTP for sending, with SSL/TLS or STARTTLS
-- **Sign in with Microsoft** for Outlook.com and Microsoft 365 (OAuth 2.0 in your browser; tokens kept in the system keyring)
+- **Outlook.com and Microsoft 365 through Microsoft Graph**, after **Sign in with Microsoft** (OAuth 2.0 in your browser; tokens kept in the system keyring). Folders sync incrementally with delta links, messages are read as MIME, and mail is sent with Graph, so it works where SMTP sign-in is turned off. IMAP and SMTP with the same sign-in remain available.
 - Several accounts at once, each with its own folder tree, plus a Favorites section
 - Offline first: messages, folders and attachments are cached locally. Changes made offline (read, flag, move, delete) are queued, and mail sent offline waits in the Outbox until you reconnect.
 - HTML messages are sanitized before display. Remote pictures are blocked until you allow them for a message or a sender.
@@ -104,7 +104,7 @@ The script copies the bundle to `~/.local/lib/look-in`, links `~/.local/bin/look
 On first launch the wizard asks for your name and email address and looks up the server settings, which you can change. It then asks for the password and tests the incoming and outgoing servers before saving. Add more accounts later from **File → Info → Add Account**.
 
 - **Gmail, Yahoo, iCloud:** create an *app password* in your account's security settings and use it instead of your normal password.
-- **Outlook.com and Microsoft 365:** choose **Sign in with Microsoft** and sign in in your browser. This needs a (free) app registration in Microsoft Entra that you or your IT department create once; see [docs/microsoft-app-registration.md](docs/microsoft-app-registration.md). Microsoft 365 addresses on your own domain are recognized from the domain's MX records.
+- **Outlook.com and Microsoft 365:** keep **Connect with: Microsoft Graph**, choose **Sign in with Microsoft** and sign in in your browser. This needs a (free) app registration in Microsoft Entra that you or your IT department create once; see [docs/microsoft-app-registration.md](docs/microsoft-app-registration.md). Microsoft 365 addresses on your own domain are recognized from the domain's MX records. Accounts added earlier with IMAP and SMTP can switch to Graph in **Account Settings**.
 - **Proton Mail:** use Proton Mail Bridge.
 
 ## Keyboard shortcuts
@@ -169,6 +169,9 @@ lib/
     secret_store.dart          System keyring (Secret Service) or encrypted file
     credential_store.dart      AES-GCM encryption for the file store
     mail_backend.dart          IMAP / POP3 / SMTP (enough_mail)
+    backends/                  One interface for server mailboxes: IMAP with
+                               SMTP, and Microsoft Graph (client with retries,
+                               paging and $batch; delta sync)
     mime_converter.dart        MIME parsing and building
     ical_service.dart          iCalendar parsing and generation, meeting replies
     contacts_io.dart           CSV and vCard import/export
@@ -222,13 +225,25 @@ The system-keyring tests write real keyring items, so they are skipped unless en
 tool/test_with_keyring.sh test/secret_store_test.dart
 ```
 
+`test/graph_mail_test.dart` runs the Microsoft Graph backend against a fake Graph server (`test/support/fake_graph_server.dart`) with delta sync, moves, `$batch`, sendMail and throttling. To try the app without a Microsoft account, start the fake identity and Graph servers and point Look In at them:
+
+```bash
+dart run test/support/fake_identity_server_main.dart &   # prints its address
+dart run test/support/fake_graph_server_main.dart 8765 &
+LOOKIN_MS_LOGIN_BASE=http://127.0.0.1:<port> \
+LOOKIN_GRAPH_BASE=http://127.0.0.1:8765/v1.0 flutter run -d linux
+```
+
+Then add `ann@outlook.com` with any client ID; the sign-in completes by itself when a browser (or `curl -L`) opens the link.
+
 The spell-checker tests also talk to the real hunspell when it and an `en_US` dictionary are installed.
 
 To try the app against GreenMail, add an account for `alice@example.com` (password `secret`). Use server `127.0.0.1`, IMAP port 3143, SMTP port 3025 and no encryption.
 
 ## Known limitations
 
-- Microsoft accounts use IMAP and SMTP with OAuth. Calendar and contacts don't sync with them yet (planned through Microsoft Graph). There is no Exchange ActiveSync or EWS.
+- Microsoft accounts sync mail only; calendar and contacts sync through Microsoft Graph is planned. There is no Exchange ActiveSync or EWS (Microsoft is retiring EWS in 2026-27).
+- With Microsoft Graph, a folder starts with its newest 200 messages; older ones load with **More messages on the server**, and changes to those older messages made elsewhere aren't picked up.
 - Gmail needs an app password; Sign in with Google isn't available yet.
 - The calendar and contacts are local. They are not synced over CalDAV or CardDAV; exchange them through .ics, .vcf and .csv files or meeting invitations.
 - The editor has no tables. Replies and forwards keep the original's tables, but they aren't editable in the message.
