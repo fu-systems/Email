@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../models/email_account.dart';
 import '../../providers/mail_provider.dart';
 import '../../services/data_store.dart';
+import '../../services/oauth/oauth_config.dart';
+import '../../services/oauth/token_manager.dart';
+import '../settings/microsoft_sign_in.dart';
 import '../../theme/outlook_theme.dart';
 import '../../widgets/folder_pane.dart';
 import '../../widgets/message_list.dart';
@@ -104,10 +108,97 @@ class _MailViewState extends State<MailView> {
               onEnd: _persist,
             ),
           ],
-          Expanded(child: content),
+          Expanded(
+            child: Column(
+              children: [
+                const _SignInProblems(),
+                Expanded(child: content),
+              ],
+            ),
+          ),
         ],
       );
     });
+  }
+}
+
+/// Info bars for accounts that can't sign in, with the way to fix it:
+/// signing in to Microsoft again, or the account settings.
+class _SignInProblems extends StatelessWidget {
+  const _SignInProblems();
+
+  Future<void> _signInAgain(BuildContext context, EmailAccount account) async {
+    final mail = context.read<MailProvider>();
+    final result = await signInWithMicrosoft(
+      context,
+      store: mail.store,
+      loginHint: account.emailAddress,
+      registration: account.oauthClientId == null
+          ? null
+          : OAuthRegistration(
+              clientId: account.oauthClientId!,
+              tenant: account.oauthTenant ?? 'common'),
+    );
+    if (result == null) return;
+    TokenManager.instance.saveSignIn(account.id, result.tokens,
+        resource: OAuthResource.outlookMail);
+    await mail.syncAccount(account.id, full: true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final mail = context.watch<MailProvider>();
+    final failed = [
+      for (final a in mail.accounts)
+        if (a.isEnabled &&
+            mail.connectionOf(a.id) == AccountConnection.authFailed)
+          a,
+    ];
+    if (failed.isEmpty) return const SizedBox.shrink();
+    return Column(
+      children: [
+        for (final a in failed)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.fromLTRB(12, 6, 8, 6),
+            decoration: const BoxDecoration(
+              color: Color(0xFFFFF4CE),
+              border: Border(bottom: BorderSide(color: Color(0xFFE8D48A))),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.warning_amber_rounded,
+                    size: 16, color: Color(0xFF8A6D00)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    a.usesOAuth
+                        ? 'Your Microsoft sign-in for ${a.emailAddress} has '
+                            'expired. Sign in again to keep getting mail.'
+                        : 'Look In couldn\'t sign in to ${a.emailAddress}: '
+                            '${mail.accountError(a.id) ?? 'check the password'}',
+                    style: const TextStyle(fontSize: 12.5),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                if (a.usesOAuth)
+                  OutlinedButton(
+                    onPressed: () => _signInAgain(context, a),
+                    child: const Text('Sign In...'),
+                  ),
+                const SizedBox(width: 6),
+                OutlinedButton(
+                  onPressed: () => Navigator.of(context)
+                      .pushNamed('/account-setup', arguments: a.id),
+                  child: const Text('Account Settings...'),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
   }
 }
 

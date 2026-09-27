@@ -20,6 +20,9 @@ class DiscoveredSettings {
   /// local part (`%EMAILLOCALPART%`).
   final bool usernameIsLocalPart;
 
+  /// Set when the service signs in with OAuth (`microsoft`).
+  final String? oauthProvider;
+
   const DiscoveredSettings({
     required this.source,
     required this.protocol,
@@ -30,7 +33,22 @@ class DiscoveredSettings {
     required this.smtpPort,
     required this.smtpSecurity,
     this.usernameIsLocalPart = false,
+    this.oauthProvider,
   });
+
+  factory DiscoveredSettings.fromProvider(EmailProviderConfig p,
+          {required String source}) =>
+      DiscoveredSettings(
+        source: source,
+        protocol: IncomingProtocol.imap,
+        incomingHost: p.imapHost,
+        incomingPort: p.imapPort,
+        incomingSecurity: p.imapSecurity,
+        smtpHost: p.smtpHost,
+        smtpPort: p.smtpPort,
+        smtpSecurity: p.smtpSecurity,
+        oauthProvider: p.oauthProvider,
+      );
 }
 
 /// Discovers mail server settings like Thunderbird does: the provider's
@@ -59,9 +77,14 @@ class AutoconfigService {
       if (parsed != null) return parsed;
     }
 
-    // Hosted domains: look up the ISPDB entry of the MX provider (e.g. a
-    // custom domain hosted by Google Workspace or Fastmail).
-    final mxDomain = await _mxBaseDomain(domain);
+    // Hosted domains: Microsoft 365 directly, others through the ISPDB
+    // entry of the MX provider (e.g. Google Workspace or Fastmail).
+    final mx = await mxHosts(domain);
+    if (mx.any(EmailProviderConfig.isMicrosoftMx)) {
+      return DiscoveredSettings.fromProvider(EmailProviderConfig.microsoft365,
+          source: 'MX: Microsoft 365');
+    }
+    final mxDomain = _baseDomain(mx);
     if (mxDomain != null && mxDomain != domain) {
       final xml = await _fetch('https://autoconfig.thunderbird.net/v1.1/$mxDomain');
       final parsed = xml == null ? null : parseConfig(xml, source: 'MX: $mxDomain');
@@ -118,8 +141,7 @@ class AutoconfigService {
 
   /// Registrable domain of the first MX host, e.g. `aspmx.l.google.com`
   /// → `google.com`.
-  static Future<String?> _mxBaseDomain(String domain) async {
-    final hosts = await mxHosts(domain);
+  static String? _baseDomain(List<String> hosts) {
     if (hosts.isEmpty) return null;
     final parts = hosts.first.split('.');
     if (parts.length < 2) return null;
@@ -142,6 +164,11 @@ class AutoconfigService {
           'port': field('port') ?? '',
           'socketType': (field('socketType') ?? '').toUpperCase(),
           'username': field('username') ?? '',
+          'authentication': RegExp(r'<authentication>\s*(.*?)\s*</authentication>',
+                  dotAll: true)
+              .allMatches(m.group(2)!)
+              .map((a) => a.group(1)!.toLowerCase())
+              .join(','),
         });
       }
       return result;
@@ -189,6 +216,10 @@ class AutoconfigService {
       smtpPort: int.parse(out['port']!),
       smtpSecurity: security(out['socketType']!),
       usernameIsLocalPart: inc['username']!.contains('%EMAILLOCALPART%'),
+      oauthProvider: inc['authentication']!.split(',').contains('oauth2') &&
+              EmailProviderConfig.isMicrosoftHost(inc['hostname']!)
+          ? 'microsoft'
+          : null,
     );
   }
 }

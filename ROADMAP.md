@@ -15,7 +15,7 @@ Phase 4: Ribbon & UI Wiring         [##########] 100%  COMPLETE
 Phase 5: Linux Platform & Build     [##########] 100%  COMPLETE
 Phase 6: Persistence & Offline      [##########] 100%  COMPLETE
 Phase 7: Advanced Features          [##########] 100%  COMPLETE
-Phase 8: Next                       [----------]   0%  PLANNED  <-- next
+Phase 8: Next                       [##--------]  20%  IN PROGRESS  <-- current
 ```
 
 ---
@@ -159,12 +159,13 @@ Deviations:
 
 ---
 
-## Phase 8: Next — PLANNED
+## Phase 8: Next — IN PROGRESS
 
 | Task | Notes |
 |------|-------|
-| OAuth2 sign-in (Gmail, Outlook.com / Microsoft 365) | Microsoft no longer accepts passwords over IMAP |
-| Secret Service keyring for passwords | GNOME Keyring / KWallet instead of the local key file |
+| OAuth2 sign-in for Outlook.com / Microsoft 365 (IMAP/SMTP XOAUTH2) | **Done**: bring-your-own Entra registration, see docs/microsoft-app-registration.md |
+| Sign in with Google | Needs Google's restricted-scope verification; app passwords work meanwhile |
+| Secret Service keyring for passwords and tokens | **Done** (File > Options > Security) |
 | CalDAV / CardDAV sync | Calendar and contacts are local-only today |
 | Rich-text compose editor | Compose is plain text with a generated HTML part |
 | IMAP IDLE push | Sync currently polls on each account's interval |

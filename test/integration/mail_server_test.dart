@@ -25,6 +25,11 @@ import 'package:look_in/services/data_store.dart';
 import 'package:look_in/services/mail_backend.dart';
 import 'package:look_in/services/mime_converter.dart';
 import 'package:look_in/services/notification_service.dart';
+import 'package:look_in/services/oauth/oauth_config.dart';
+import 'package:look_in/services/oauth/oauth_flow.dart';
+import 'package:look_in/services/oauth/token_manager.dart';
+
+import '../support/fake_identity_server.dart';
 
 const _host = '127.0.0.1';
 
@@ -388,5 +393,88 @@ void main() {
     expect(mail.connectionOf(offline.id), AccountConnection.offline);
     mail.dispose();
     store.close();
+  });
+
+  test('Microsoft-style sign-in: XOAUTH2 for IMAP and SMTP with refresh',
+      () async {
+    if (!available) return markTestSkipped('no mail server');
+    // GreenMail accepts the user's password as an XOAUTH2 bearer token, so
+    // the fake identity platform hands out "secret" as the access token.
+    final idp = await FakeIdentityServer.start();
+    OAuthProviderConfig.microsoftLoginBase = idp.base;
+    final store = DataStore.inMemory();
+    DataStore.instance = store;
+    addTearDown(() async {
+      OAuthProviderConfig.microsoftLoginBase =
+          'https://login.microsoftonline.com';
+      TokenManager.instance = null;
+      store.close();
+      await idp.close();
+    });
+    idp
+      ..accessToken = 'secret'
+      ..username = 'carol@example.com';
+
+    final account = carol.copyWith(
+      id: 'carol-oauth',
+      password: '',
+      authMethod: AuthMethod.oauth2,
+      oauthProvider: 'microsoft',
+      oauthClientId: '11111111-2222-3333-4444-555555555555',
+      oauthTenant: 'common',
+    );
+    // Sign in as the app does, through the loopback redirect.
+    final signIn = await OAuthFlow.start(
+      OAuthProviderConfig.microsoft(const OAuthRegistration(
+          clientId: '11111111-2222-3333-4444-555555555555')),
+      scopes: OAuthResource.outlookMail.signInScopes,
+      launch: idp.browse,
+    );
+    final tokens = await signIn.result;
+    expect(tokens.username, 'carol@example.com');
+    // Pretend the token is about to expire so the first use refreshes it.
+    TokenManager.instance.saveSignIn(
+      account.id,
+      OAuthTokens(
+        accessToken: 'stale',
+        refreshToken: tokens.refreshToken,
+        expiresAt: DateTime.now().add(const Duration(minutes: 1)),
+      ),
+      resource: OAuthResource.outlookMail,
+    );
+
+    expect(await testAccountConnection(account), isNull);
+    expect(idp.tokenRequests.last['grant_type'], 'refresh_token');
+
+    final subject = _subject('OAuth');
+    final mime = await MimeConverter.buildMimeMessage(
+        OutgoingMessage(
+          id: subject,
+          accountId: account.id,
+          to: const [carolAddress],
+          subject: subject,
+          textBody: 'sent with a token',
+          createdAt: DateTime.now(),
+        ),
+        account);
+    await SmtpSender.send(account, mime, const [carolAddress]);
+    final backend = ImapBackend(account);
+    final found = await _waitForSubject(backend, await _inbox(backend), subject);
+    expect(found, hasLength(1));
+    await backend.disconnect();
+
+    // A revoked sign-in surfaces as an authentication problem.
+    TokenManager.instance.saveSignIn(
+      account.id,
+      OAuthTokens(
+        accessToken: 'stale',
+        refreshToken: 'revoked',
+        expiresAt: DateTime.now(),
+      ),
+      resource: OAuthResource.outlookMail,
+    );
+    idp.failRefreshWith = 'invalid_grant';
+    await expectLater(ImapBackend(account).connect(),
+        throwsA(isA<MailAuthenticationException>()));
   });
 }

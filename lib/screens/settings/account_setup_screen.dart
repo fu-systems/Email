@@ -1,12 +1,19 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../models/email_account.dart';
 import '../../models/email_message.dart';
 import '../../providers/account_provider.dart';
+import '../../providers/mail_provider.dart';
 import '../../services/autoconfig_service.dart';
+import '../../services/data_store.dart';
 import '../../services/mail_backend.dart';
+import '../../services/oauth/oauth_config.dart';
+import '../../services/oauth/token_manager.dart';
 import '../../theme/outlook_theme.dart';
+import 'microsoft_sign_in.dart';
 
 /// Add Account wizard (first run or File > Add Account), or the Account
 /// Settings page when opened with an account id as route argument.
@@ -32,6 +39,19 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
   String? _providerNote;
   EmailAccount? _editing;
   bool _initialized = false;
+  String? _newAccountId;
+
+  // "Sign in with Microsoft"
+  /// OAuth provider the detected service supports (`microsoft`).
+  String? _oauthProvider;
+  bool _useOAuth = false;
+  OAuthRegistration? _oauthRegistration;
+  String? _signedInAs;
+
+  /// Email address the current sign-in was made for.
+  String? _signedInFor;
+  bool _signedInHere = false;
+  bool _saved = false;
 
   final _emailController = TextEditingController();
   final _displayNameController = TextEditingController();
@@ -54,6 +74,12 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
   int _syncInterval = 5;
 
   bool get _isEditMode => _editing != null;
+
+  /// The id the account will have, fixed for the whole wizard so that a
+  /// sign-in made before saving belongs to it.
+  String get _accountId =>
+      _editing?.id ??
+      (_newAccountId ??= context.read<AccountProvider>().generateAccountId());
 
   static bool _isValidEmail(String address) =>
       EmailAddress(address: address).isValid;
@@ -90,10 +116,28 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
     _isEnabled = a.isEnabled;
     _isDefault = a.isDefault;
     _syncInterval = a.syncIntervalMinutes;
+    _useOAuth = a.usesOAuth;
+    _oauthProvider = a.oauthProvider ??
+        (EmailProviderConfig.isMicrosoftHost(a.incomingHost)
+            ? OAuthProviderConfig.microsoftId
+            : null);
+    if (a.usesOAuth && a.oauthClientId != null) {
+      _oauthRegistration = OAuthRegistration(
+          clientId: a.oauthClientId!, tenant: a.oauthTenant ?? 'common');
+      final grant = TokenManager.instance.grantFor(a.id);
+      if (grant != null) {
+        _signedInAs = grant.username ?? a.emailAddress;
+        _signedInFor = a.emailAddress;
+      }
+    }
   }
 
   @override
   void dispose() {
+    // A sign-in for an account that was never added is dropped.
+    if (_signedInHere && !_saved && !_isEditMode && _newAccountId != null) {
+      TokenManager.instance.signOut(_newAccountId!);
+    }
     for (final c in [
       _emailController,
       _displayNameController,
@@ -117,11 +161,19 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
     final domain = email.contains('@') ? email.split('@').last : '';
     if (_usernameController.text.isEmpty) _usernameController.text = email;
 
+    if (_signedInFor != null &&
+        _signedInFor!.toLowerCase() != email.toLowerCase()) {
+      // The address changed after signing in: that sign-in doesn't apply.
+      _signedInAs = null;
+      _signedInFor = null;
+    }
+
     final known = EmailProviderConfig.detectFromEmail(email);
     if (known != null) {
       setState(() {
         _detectedName = known.name;
         _providerNote = known.note;
+        _setOAuthProvider(known.oauthProvider);
         _protocol = IncomingProtocol.imap;
         _incomingHostController.text = known.imapHost;
         _incomingPortController.text = '${known.imapPort}';
@@ -139,8 +191,13 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
     setState(() {
       _isDiscovering = false;
       if (found != null) {
-        _detectedName = 'settings found (${Uri.tryParse(found.source)?.host ?? found.source})';
-        _providerNote = null;
+        _detectedName = found.source.startsWith('MX: ')
+            ? found.source.substring(4)
+            : 'settings found (${Uri.tryParse(found.source)?.host ?? found.source})';
+        _providerNote = found.oauthProvider == null
+            ? null
+            : EmailProviderConfig.microsoft365.note;
+        _setOAuthProvider(found.oauthProvider);
         _protocol = found.protocol;
         _incomingHostController.text = found.incomingHost;
         _incomingPortController.text = '${found.incomingPort}';
@@ -153,12 +210,49 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
         }
       } else {
         _detectedName = null;
+        _setOAuthProvider(null);
         if (_incomingHostController.text.isEmpty && domain.isNotEmpty) {
           _incomingHostController.text = 'imap.$domain';
           _smtpHostController.text = 'smtp.$domain';
         }
       }
     });
+  }
+
+  void _setOAuthProvider(String? provider) {
+    _oauthProvider = provider;
+    _useOAuth = provider != null;
+  }
+
+  // ─── Microsoft sign-in ─────────────────────────────────────────────
+
+  Future<void> _signInWithMicrosoft() async {
+    final email = _emailController.text.trim();
+    final result = await signInWithMicrosoft(context,
+        store: DataStore.instance, loginHint: email);
+    if (result == null || !mounted) return;
+    TokenManager.instance.saveSignIn(_accountId, result.tokens,
+        resource: OAuthResource.outlookMail);
+    setState(() {
+      _oauthRegistration = result.registration;
+      _signedInAs = result.tokens.username ?? email;
+      _signedInFor = email;
+      _signedInHere = true;
+      _useOAuth = true;
+      _protocol = IncomingProtocol.imap;
+      _testError = null;
+      final name = result.tokens.displayName;
+      if (_displayNameController.text.trim().isEmpty && name != null) {
+        _displayNameController.text = name;
+      }
+    });
+  }
+
+  String? _credentialProblem() {
+    if (_useOAuth && _signedInAs == null) {
+      return 'Sign in with Microsoft to continue.';
+    }
+    return null;
   }
 
   // ─── Actions ───────────────────────────────────────────────────────
@@ -168,7 +262,7 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
     final name = _displayNameController.text.trim();
     final base = _editing;
     return EmailAccount(
-      id: base?.id ?? context.read<AccountProvider>().generateAccountId(),
+      id: _accountId,
       displayName: name.isNotEmpty ? name : email,
       emailAddress: email,
       protocol: _protocol,
@@ -179,8 +273,12 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
       smtpHost: _smtpHostController.text.trim(),
       smtpPort: int.tryParse(_smtpPortController.text.trim()) ?? 587,
       smtpSecurity: _smtpSecurity,
-      username: _usernameController.text.trim(),
-      password: _passwordController.text,
+      username: _useOAuth ? email : _usernameController.text.trim(),
+      password: _useOAuth ? '' : _passwordController.text,
+      authMethod: _useOAuth ? AuthMethod.oauth2 : AuthMethod.password,
+      oauthProvider: _useOAuth ? _oauthProvider : null,
+      oauthClientId: _useOAuth ? _oauthRegistration?.clientId : null,
+      oauthTenant: _useOAuth ? _oauthRegistration?.tenant : null,
       isDefault: base == null ? _isDefault : _isDefault,
       isEnabled: _isEnabled,
       signature: _signatureController.text.trim().isEmpty
@@ -209,7 +307,7 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
   }
 
   Future<void> _testConnection() async {
-    final problem = _validate();
+    final problem = _validate() ?? _credentialProblem();
     if (problem != null) {
       setState(() {
         _testError = problem;
@@ -232,18 +330,24 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
   }
 
   Future<void> _save() async {
-    final problem = _validate();
+    final problem = _validate() ?? _credentialProblem();
     if (problem != null) {
       setState(() => _testError = problem);
       return;
     }
     final accounts = context.read<AccountProvider>();
+    final mail = context.read<MailProvider>();
     final account = _buildAccount();
     if (_isEditMode) {
+      final unchanged = accounts.byId(account.id)?.toMap().toString() ==
+          account.toMap().toString();
       await accounts.updateAccount(account);
+      // A fresh sign-in doesn't change the account itself: sync now.
+      if (unchanged && _signedInHere) unawaited(mail.syncAccount(account.id));
     } else {
       await accounts.addAccount(account);
     }
+    _saved = true;
     if (!mounted) return;
     // On first run _AppRoot swaps to the home screen by itself.
     if (!widget.isFirstRun && Navigator.of(context).canPop()) {
@@ -262,6 +366,14 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
     }
     if (_currentStep == 1) {
       final problem = _validate();
+      if (problem != null) {
+        setState(() => _testError = problem);
+        return;
+      }
+      _testError = null;
+    }
+    if (_currentStep == 2) {
+      final problem = _credentialProblem();
       if (problem != null) {
         setState(() => _testError = problem);
         return;
@@ -365,7 +477,6 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
                   width: 600,
                   margin: const EdgeInsets.symmetric(vertical: 24),
                   decoration: BoxDecoration(
-                    color: Colors.white,
                     border: Border.all(color: OutlookTheme.dividerColor),
                     boxShadow: [
                       BoxShadow(
@@ -375,7 +486,12 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
                       ),
                     ],
                   ),
-                  child: _isEditMode ? _buildEditPage() : _buildWizard(),
+                  // A Material (not a colored box) so list tiles and ink
+                  // splashes paint on the card.
+                  child: Material(
+                    color: Colors.white,
+                    child: _isEditMode ? _buildEditPage() : _buildWizard(),
+                  ),
                 ),
               ),
             ),
@@ -451,7 +567,7 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
                 _serverFields(),
                 const SizedBox(height: 20),
                 _sectionTitle('Logon Information'),
-                _credentialFields(),
+                _logonSection(),
                 const SizedBox(height: 20),
                 _sectionTitle('Options'),
                 _optionFields(),
@@ -479,10 +595,13 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
           child: Row(
             children: [
-              OutlinedButton.icon(
-                onPressed: _isTesting ? null : _testConnection,
-                icon: const Icon(Icons.wifi_tethering, size: 16),
-                label: const Text('Test Account Settings...'),
+              Flexible(
+                child: OutlinedButton.icon(
+                  onPressed: _isTesting ? null : _testConnection,
+                  icon: const Icon(Icons.wifi_tethering, size: 16),
+                  label: const Text('Test Account Settings...',
+                      overflow: TextOverflow.ellipsis),
+                ),
               ),
               const Spacer(),
               OutlinedButton(
@@ -583,12 +702,15 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
           child: DropdownButtonFormField<ConnectionSecurity>(
             initialValue: value,
             key: ValueKey(value),
+            isExpanded: true,
             decoration: const InputDecoration(labelText: 'Encryption'),
             items: [
               for (final s in ConnectionSecurity.values)
                 DropdownMenuItem(
                   value: s,
-                  child: Text(s.label, style: const TextStyle(fontSize: 13)),
+                  child: Text(s.label,
+                      style: const TextStyle(fontSize: 13),
+                      overflow: TextOverflow.ellipsis),
                 ),
             ],
             onChanged: (v) {
@@ -607,7 +729,12 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
             SegmentedButton<IncomingProtocol>(
               segments: [
                 for (final p in IncomingProtocol.values)
-                  ButtonSegment(value: p, label: Text(p.label)),
+                  ButtonSegment(
+                    value: p,
+                    label: Text(p.label),
+                    // Microsoft sign-in works with IMAP only.
+                    enabled: !(_useOAuth && p == IncomingProtocol.pop3),
+                  ),
               ],
               selected: {_protocol},
               showSelectedIcon: false,
@@ -733,13 +860,92 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (_providerNote != null) ...[
-          _Banner(icon: Icons.info_outline, text: _providerNote!),
-          const SizedBox(height: 16),
+        if (_useOAuth) ...[
+          const Text('Sign in to your Microsoft account',
+              style: OutlookTheme.readingPaneSubject),
+          const SizedBox(height: 8),
+          const Text(
+            'Look In opens your web browser so you can sign in with Microsoft. '
+            'Your password is never shown to Look In; it keeps only a sign-in '
+            'token, stored encrypted on this computer.',
+            style: TextStyle(fontSize: 13, color: OutlookTheme.textSecondary),
+          ),
+          const SizedBox(height: 20),
         ],
-        _credentialFields(),
+        _logonSection(),
+        if (_providerNote != null) ...[
+          const SizedBox(height: 20),
+          _Banner(icon: Icons.info_outline, text: _providerNote!),
+        ],
       ],
     );
+  }
+
+  /// Password fields, or the Microsoft sign-in state and buttons.
+  Widget _logonSection() {
+    if (!_useOAuth) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _credentialFields(),
+          if (_oauthProvider != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: TextButton.icon(
+                onPressed: () => setState(() {
+                  _useOAuth = true;
+                  _setProtocolIfPop();
+                }),
+                icon: const MicrosoftLogo(size: 14),
+                label: const Text('Sign in with Microsoft instead'),
+              ),
+            ),
+        ],
+      );
+    }
+    final signedIn = _signedInAs != null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (signedIn)
+          _Banner(
+            icon: Icons.check_circle,
+            color: OutlookTheme.calendarEventGreen,
+            text: 'Signed in with Microsoft as $_signedInAs.',
+          ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 12,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            MicrosoftSignInButton(
+              label: signedIn
+                  ? 'Sign in again or with another account'
+                  : 'Sign in with Microsoft',
+              primary: !signedIn,
+              onPressed: _signInWithMicrosoft,
+            ),
+            TextButton(
+              onPressed: () => setState(() => _useOAuth = false),
+              child: const Text('Use a password instead'),
+            ),
+          ],
+        ),
+        if (_oauthRegistration != null || signedIn) ...[
+          const SizedBox(height: 8),
+          Text(
+            'App registration: ${_oauthRegistration?.clientId ?? 'unknown'}'
+            '${_oauthRegistration == null ? '' : ' (${_oauthRegistration!.tenant})'}',
+            style: const TextStyle(fontSize: 11.5, color: OutlookTheme.textMuted),
+          ),
+        ],
+      ],
+    );
+  }
+
+  void _setProtocolIfPop() {
+    if (_protocol == IncomingProtocol.pop3) _setProtocol(IncomingProtocol.imap);
   }
 
   Widget _optionFields() => Column(
@@ -830,7 +1036,10 @@ class _AccountSetupScreenState extends State<AccountSetupScreen> {
             '${_incomingHostController.text}:${_incomingPortController.text} (${_incomingSecurity.label})'),
         _summaryRow('SMTP',
             '${_smtpHostController.text}:${_smtpPortController.text} (${_smtpSecurity.label})'),
-        _summaryRow('User name', _usernameController.text),
+        if (_useOAuth)
+          _summaryRow('Sign-in', 'Microsoft account (${_signedInAs ?? 'not signed in'})')
+        else
+          _summaryRow('User name', _usernameController.text),
         const SizedBox(height: 20),
         _testResult(),
         const SizedBox(height: 12),
@@ -957,6 +1166,67 @@ class _StepIndicator extends StatelessWidget {
           );
         }),
       ),
+    );
+  }
+}
+
+/// The four-square Microsoft logo, drawn for the sign-in button.
+class MicrosoftLogo extends StatelessWidget {
+  final double size;
+
+  const MicrosoftLogo({super.key, this.size = 16});
+
+  @override
+  Widget build(BuildContext context) {
+    final square = size * 0.45;
+    Widget box(Color c) => Container(width: square, height: square, color: c);
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [box(const Color(0xFFF25022)), box(const Color(0xFF7FBA00))],
+          ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [box(const Color(0xFF00A4EF)), box(const Color(0xFFFFB900))],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// "Sign in with Microsoft" in Microsoft's button style.
+class MicrosoftSignInButton extends StatelessWidget {
+  final String label;
+  final VoidCallback onPressed;
+  final bool primary;
+
+  const MicrosoftSignInButton({
+    super.key,
+    required this.label,
+    required this.onPressed,
+    this.primary = true,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton.icon(
+      onPressed: onPressed,
+      style: OutlinedButton.styleFrom(
+        backgroundColor: primary ? const Color(0xFF2F2F2F) : Colors.white,
+        foregroundColor: primary ? Colors.white : OutlookTheme.textPrimary,
+        side: BorderSide(
+            color: primary ? const Color(0xFF2F2F2F) : const Color(0xFF8C8C8C)),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+      ),
+      icon: const MicrosoftLogo(size: 18),
+      label: Text(label),
     );
   }
 }

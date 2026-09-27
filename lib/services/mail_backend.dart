@@ -1,13 +1,18 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:enough_mail/enough_mail.dart' as enough;
+// SmtpCommand isn't exported; it is the documented way to extend SmtpClient.
+// ignore: implementation_imports
+import 'package:enough_mail/src/private/smtp/smtp_command.dart' as smtp;
 
 import '../models/email_account.dart';
 import '../models/email_message.dart';
 import '../models/folder.dart';
 import 'mime_converter.dart';
+import 'oauth/token_manager.dart';
 
 /// Thrown when the server cannot be reached (offline, DNS, timeouts), as
 /// opposed to the server rejecting a request.
@@ -148,13 +153,24 @@ class ImapBackend {
       throw MailConnectionException(_describe(e), e);
     }
     try {
-      await client.login(account.username, account.password);
+      if (account.usesOAuth) {
+        final token = await TokenManager.instance.accessToken(account);
+        await client.authenticateWithOAuth2(account.username, token);
+      } else {
+        await client.login(account.username, account.password);
+      }
     } on enough.ImapException catch (e) {
-      try {
-        await client.disconnect();
-      } catch (_) {}
-      throw MailAuthenticationException(
-          'Login failed: ${e.message ?? 'check your user name and password'}');
+      await _disconnectQuietly(client);
+      final message = e.message ?? 'check your user name and password';
+      throw MailAuthenticationException(account.usesOAuth
+          ? 'Sign-in failed: ${explainMicrosoftError(message)}'
+          : 'Login failed: $message');
+    } on MailAuthenticationException {
+      await _disconnectQuietly(client);
+      rethrow;
+    } on MailConnectionException {
+      await _disconnectQuietly(client);
+      rethrow;
     } catch (e) {
       throw MailConnectionException(_describe(e), e);
     }
@@ -162,6 +178,12 @@ class ImapBackend {
   }
 
   Future<void> disconnect() => _lock.run(_closeQuietly);
+
+  static Future<void> _disconnectQuietly(enough.ImapClient client) async {
+    try {
+      await client.disconnect();
+    } catch (_) {}
+  }
 
   Future<void> _closeQuietly() async {
     final client = _client;
@@ -649,6 +671,14 @@ class Pop3Backend {
       } catch (e) {
         throw MailConnectionException(_describe(e), e);
       }
+      if (account.usesOAuth) {
+        try {
+          await client.disconnect();
+        } catch (_) {}
+        throw const MailAuthenticationException(
+            'POP3 can\'t be used with Microsoft sign-in. Choose IMAP in '
+            'Account Settings.');
+      }
       try {
         await client.login(account.username, account.password);
       } on enough.PopException catch (e) {
@@ -799,6 +829,27 @@ class SmtpSender {
 
   static Future<void> _authenticate(
       enough.SmtpClient client, EmailAccount account) async {
+    if (account.usesOAuth) {
+      final token = await TokenManager.instance.accessToken(account);
+      try {
+        await client.sendCommand(_XOAuth2Command(account.username, token));
+      } on enough.SmtpException catch (e) {
+        final code = e.response.code;
+        if (code == null || !const {500, 501, 502, 504}.contains(code)) {
+          throw MailAuthenticationException('SMTP sign-in failed: '
+              '${explainMicrosoftError(e.message ?? e.toString())}');
+        }
+        // The server wants the token after a 334 prompt instead.
+        try {
+          await client.authenticate(
+              account.username, token, enough.AuthMechanism.xoauth2);
+        } on enough.SmtpException catch (e) {
+          throw MailAuthenticationException('SMTP sign-in failed: '
+              '${explainMicrosoftError(e.message ?? e.toString())}');
+        }
+      }
+      return;
+    }
     final mechanisms = client.serverInfo.authMechanisms;
     if (account.username.isEmpty || mechanisms.isEmpty) return;
     final mechanism = passwordMechanism(mechanisms);
@@ -840,6 +891,58 @@ class SmtpSender {
       await client.disconnect();
     } catch (_) {}
   }
+}
+
+/// `AUTH XOAUTH2` with the token on the command line (SASL initial
+/// response, RFC 4954), as Thunderbird sends it. Exchange Online accepts
+/// this and the two-step form; some servers (GreenMail) only this one.
+class _XOAuth2Command extends smtp.SmtpCommand {
+  _XOAuth2Command(String user, String token)
+      : super('AUTH XOAUTH2 ${base64.encode(utf8.encode(
+            'user=$user\u0001auth=Bearer $token\u0001\u0001'))}');
+
+  bool _answeredChallenge = false;
+
+  /// A 334 here carries a base64 JSON error; an empty line ends the
+  /// exchange so that the server sends its final error code.
+  @override
+  String? nextCommand(enough.SmtpResponse response) {
+    if (response.code == 334 && !_answeredChallenge) {
+      _answeredChallenge = true;
+      return '';
+    }
+    return null;
+  }
+
+  @override
+  bool isCommandDone(enough.SmtpResponse response) =>
+      response.code != 334 || _answeredChallenge;
+
+  @override
+  String toString() => 'AUTH XOAUTH2 <token>';
+}
+
+/// Adds what to do about Microsoft's common IMAP/SMTP sign-in errors.
+String explainMicrosoftError(String message) {
+  final m = message.toLowerCase();
+  if (m.contains('smtpclientauthentication is disabled') ||
+      m.contains('5.7.139')) {
+    return '$message\nYour organization has turned off SMTP sign-in (SMTP '
+        'AUTH) for this mailbox. An administrator can allow it (Microsoft 365 '
+        'admin center > Users > Mail > Manage email apps > Authenticated '
+        'SMTP).';
+  }
+  if (m.contains('authenticated but not connected')) {
+    return '$message\nIMAP is probably turned off for this mailbox. In '
+        'Outlook.com, allow it under Settings > Mail > Forwarding and IMAP; '
+        'for Microsoft 365, ask your administrator to enable IMAP.';
+  }
+  if (m.contains('authenticate failed') || m.contains('authentication unsuccessful')) {
+    return '$message\nThe mailbox may not allow IMAP/SMTP sign-in, or the '
+        'app registration lacks the IMAP.AccessAsUser.All and SMTP.Send '
+        'permissions.';
+  }
+  return message;
 }
 
 /// Tests incoming and outgoing settings of [account]. Returns null on

@@ -18,7 +18,20 @@ class EmailAccount {
 
   // Credentials
   final String username;
+
+  /// The password, unless [authMethod] is [AuthMethod.oauth2]. Kept in the
+  /// secret store, never in the account document.
   final String password;
+
+  /// Password or "Sign in with Microsoft". OAuth tokens live in the secret
+  /// store under `oauth:<id>` (see TokenManager), never in the account.
+  final AuthMethod authMethod;
+
+  /// OAuth provider (`microsoft`) and the app registration the tokens were
+  /// issued to, so refreshing keeps working if the default one changes.
+  final String? oauthProvider;
+  final String? oauthClientId;
+  final String? oauthTenant;
 
   // Account state
   final bool isDefault;
@@ -47,6 +60,10 @@ class EmailAccount {
     this.smtpSecurity = ConnectionSecurity.starttls,
     required this.username,
     required this.password,
+    this.authMethod = AuthMethod.password,
+    this.oauthProvider,
+    this.oauthClientId,
+    this.oauthTenant,
     this.isDefault = false,
     this.isEnabled = true,
     this.signature,
@@ -56,6 +73,8 @@ class EmailAccount {
   });
 
   bool get isPop3 => protocol == IncomingProtocol.pop3;
+
+  bool get usesOAuth => authMethod == AuthMethod.oauth2;
 
   /// "Name <address>" form used for the From header.
   String get fromDisplay =>
@@ -76,6 +95,10 @@ class EmailAccount {
     ConnectionSecurity? smtpSecurity,
     String? username,
     String? password,
+    AuthMethod? authMethod,
+    String? oauthProvider,
+    String? oauthClientId,
+    String? oauthTenant,
     bool? isDefault,
     bool? isEnabled,
     String? signature,
@@ -97,6 +120,10 @@ class EmailAccount {
       smtpSecurity: smtpSecurity ?? this.smtpSecurity,
       username: username ?? this.username,
       password: password ?? this.password,
+      authMethod: authMethod ?? this.authMethod,
+      oauthProvider: oauthProvider ?? this.oauthProvider,
+      oauthClientId: oauthClientId ?? this.oauthClientId,
+      oauthTenant: oauthTenant ?? this.oauthTenant,
       isDefault: isDefault ?? this.isDefault,
       isEnabled: isEnabled ?? this.isEnabled,
       signature: clearSignature ? null : (signature ?? this.signature),
@@ -123,6 +150,10 @@ class EmailAccount {
         'smtpSecurity': smtpSecurity.name,
         'username': username,
         if (includePassword) 'password': password,
+        'authMethod': authMethod.name,
+        'oauthProvider': ?oauthProvider,
+        'oauthClientId': ?oauthClientId,
+        'oauthTenant': ?oauthTenant,
         'isDefault': isDefault ? 1 : 0,
         'isEnabled': isEnabled ? 1 : 0,
         'signature': signature,
@@ -152,6 +183,12 @@ class EmailAccount {
             map['smtpSecurity'] as String?, ConnectionSecurity.starttls),
         username: map['username'] as String? ?? '',
         password: map['password'] as String? ?? '',
+        authMethod: AuthMethod.values
+                .asNameMap()[map['authMethod'] as String? ?? 'password'] ??
+            AuthMethod.password,
+        oauthProvider: map['oauthProvider'] as String?,
+        oauthClientId: map['oauthClientId'] as String?,
+        oauthTenant: map['oauthTenant'] as String?,
         isDefault: (map['isDefault'] as int? ?? 0) == 1,
         isEnabled: (map['isEnabled'] as int? ?? 1) == 1,
         signature: map['signature'] as String?,
@@ -161,6 +198,14 @@ class EmailAccount {
         acceptInvalidCertificates:
             (map['acceptInvalidCertificates'] as int? ?? 0) == 1,
       );
+}
+
+/// How Look In signs in to the account's servers.
+enum AuthMethod {
+  password,
+
+  /// OAuth 2.0 (XOAUTH2 for IMAP and SMTP), e.g. "Sign in with Microsoft".
+  oauth2,
 }
 
 enum IncomingProtocol {
@@ -214,6 +259,9 @@ class EmailProviderConfig {
   /// Shown in the setup wizard, e.g. that an app password is required.
   final String? note;
 
+  /// Sign-in provider when the service uses OAuth (`microsoft`).
+  final String? oauthProvider;
+
   const EmailProviderConfig({
     required this.name,
     required this.domains,
@@ -225,7 +273,44 @@ class EmailProviderConfig {
     required this.smtpSecurity,
     this.popHost,
     this.note,
+    this.oauthProvider,
   });
+
+  static const _outlookImapNote = 'If sign-in works but no mail arrives, '
+      'check that IMAP is allowed for the mailbox (Outlook.com: Settings > '
+      'Mail > Forwarding and IMAP; Microsoft 365: ask your administrator).';
+
+  /// Exchange Online mailboxes on custom domains, recognized by their MX
+  /// records (see [isMicrosoftMx]).
+  static const microsoft365 = EmailProviderConfig(
+    name: 'Microsoft 365',
+    domains: [],
+    imapHost: 'outlook.office365.com',
+    imapPort: 993,
+    imapSecurity: ConnectionSecurity.ssl,
+    smtpHost: 'smtp.office365.com',
+    smtpPort: 587,
+    smtpSecurity: ConnectionSecurity.starttls,
+    note: _outlookImapNote,
+    oauthProvider: 'microsoft',
+  );
+
+  /// Whether an MX host belongs to Exchange Online / Outlook.com.
+  static bool isMicrosoftMx(String host) {
+    final h = host.toLowerCase().replaceAll(RegExp(r'\.$'), '');
+    return h.endsWith('.mail.protection.outlook.com') ||
+        h.endsWith('.olc.protection.outlook.com') ||
+        h.endsWith('.mail.eo.outlook.com');
+  }
+
+  /// Whether a server name is Microsoft's IMAP/POP/SMTP endpoint.
+  static bool isMicrosoftHost(String host) => const {
+        'outlook.office365.com',
+        'outlook.office.com',
+        'smtp.office365.com',
+        'smtp-mail.outlook.com',
+        'imap-mail.outlook.com',
+      }.contains(host.trim().toLowerCase());
 
   static const List<EmailProviderConfig> knownProviders = [
     EmailProviderConfig(
@@ -251,8 +336,8 @@ class EmailProviderConfig {
       smtpPort: 587,
       smtpSecurity: ConnectionSecurity.starttls,
       popHost: 'outlook.office365.com',
-      note: 'Microsoft has turned off password sign-in for Outlook.com; it '
-          'needs OAuth, which Look In does not support yet.',
+      note: _outlookImapNote,
+      oauthProvider: 'microsoft',
     ),
     EmailProviderConfig(
       name: 'Yahoo Mail',

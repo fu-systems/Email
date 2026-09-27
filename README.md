@@ -17,6 +17,7 @@ Microsoft Outlook 2013, built with Flutter.
 
 **Mail**
 - IMAP and POP3 for receiving and SMTP for sending, with SSL/TLS or STARTTLS
+- **Sign in with Microsoft** for Outlook.com and Microsoft 365 (OAuth 2.0 in your browser; tokens kept in the system keyring)
 - Several accounts at once, each with its own folder tree, plus a Favorites section
 - Offline first: messages, folders and attachments are cached locally. Changes made offline (read, flag, move, delete) are queued, and mail sent offline waits in the Outbox until you reconnect.
 - HTML messages are sanitized before display. Remote pictures are blocked until you allow them for a message or a sender.
@@ -96,7 +97,7 @@ The script copies the bundle to `~/.local/lib/look-in`, links `~/.local/bin/look
 On first launch the wizard asks for your name and email address and looks up the server settings, which you can change. It then asks for the password and tests the incoming and outgoing servers before saving. Add more accounts later from **File → Info → Add Account**.
 
 - **Gmail, Yahoo, iCloud:** create an *app password* in your account's security settings and use it instead of your normal password.
-- **Outlook.com / Microsoft 365:** Microsoft only allows OAuth sign-in, which Look In does not support yet.
+- **Outlook.com and Microsoft 365:** choose **Sign in with Microsoft** and sign in in your browser. This needs a (free) app registration in Microsoft Entra that you or your IT department create once; see [docs/microsoft-app-registration.md](docs/microsoft-app-registration.md). Microsoft 365 addresses on your own domain are recognized from the domain's MX records.
 - **Proton Mail:** use Proton Mail Bridge.
 
 ## Keyboard shortcuts
@@ -163,6 +164,8 @@ lib/
     ical_service.dart          iCalendar parsing and generation, meeting replies
     contacts_io.dart           CSV and vCard import/export
     html_sanitizer.dart        Safe HTML display, quoting, HTML↔text
+    oauth/                     Sign in with Microsoft: PKCE loopback flow,
+                               token refresh, app registration sources
     autoconfig_service.dart    ISPDB, autoconfig and MX discovery
     dns_mx.dart                Minimal DNS client for MX lookups
     notification_service.dart  Desktop notifications over D-Bus
@@ -209,7 +212,8 @@ To try the app against GreenMail, add an account for `alice@example.com` (passwo
 
 ## Known limitations
 
-- No OAuth2 sign-in yet (needed for Outlook.com and Microsoft 365), and no Exchange ActiveSync or EWS.
+- Microsoft accounts use IMAP and SMTP with OAuth. Calendar and contacts don't sync with them yet (planned through Microsoft Graph). There is no Exchange ActiveSync or EWS.
+- Gmail needs an app password; Sign in with Google isn't available yet.
 - The calendar and contacts are local. They are not synced over CalDAV or CardDAV; exchange them through .ics, .vcf and .csv files or meeting invitations.
 - Messages are written as plain text; a matching HTML part is generated when sending. There is no rich-text editor.
 - Printing opens a print-ready page in your web browser.

@@ -43,6 +43,7 @@ dependencies:
 
   # Desktop notifications (org.freedesktop.Notifications over D-Bus)
   dbus: ^0.7.10
+  crypto: ^3.0.7
 
 dev_dependencies:
   flutter_test:

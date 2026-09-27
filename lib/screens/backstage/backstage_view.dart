@@ -15,6 +15,7 @@ import '../calendar/calendar_view.dart';
 import '../contacts/contacts_view.dart';
 import '../mail/mail_dialogs.dart';
 import '../settings/account_setup_screen.dart';
+import '../settings/microsoft_sign_in.dart';
 
 enum BackstagePage { info, openExport, options, about }
 
@@ -485,6 +486,53 @@ class _OpenExportPage extends StatelessWidget {
 
 // ─── Options ─────────────────────────────────────────────────────────
 
+/// The app registration used for "Sign in with Microsoft".
+class _MicrosoftRegistrationOption extends StatefulWidget {
+  final DataStore store;
+
+  const _MicrosoftRegistrationOption({required this.store});
+
+  @override
+  State<_MicrosoftRegistrationOption> createState() =>
+      _MicrosoftRegistrationOptionState();
+}
+
+class _MicrosoftRegistrationOptionState
+    extends State<_MicrosoftRegistrationOption> {
+  @override
+  Widget build(BuildContext context) {
+    final registration = currentMicrosoftRegistration(widget.store);
+    final source = switch (registration?.source) {
+      null => '',
+      'settings' => '',
+      'build' => ' (built into this copy of Look In)',
+      final path => ' (from $path)',
+    };
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            registration == null
+                ? 'Not set up. Outlook.com and Microsoft 365 accounts sign in '
+                    'through an app registration you create in Microsoft Entra.'
+                : 'App registration ${registration.clientId} '
+                    '(${registration.audience.label})$source.',
+            style: const TextStyle(fontSize: 13),
+          ),
+        ),
+        const SizedBox(width: 12),
+        OutlinedButton(
+          onPressed: () async {
+            await showMicrosoftRegistrationDialog(context, store: widget.store);
+            if (mounted) setState(() {});
+          },
+          child: Text(registration == null ? 'Set Up...' : 'Change...'),
+        ),
+      ],
+    );
+  }
+}
+
 /// "Store passwords in the system keyring" with the current location and
 /// any problem opening the keyring.
 class _SecretStoreOption extends StatefulWidget {
@@ -665,6 +713,8 @@ class _OptionsPage extends StatelessWidget {
           ),
           heading('Security'),
           _SecretStoreOption(store: mail.store),
+          heading('Microsoft accounts'),
+          _MicrosoftRegistrationOption(store: mail.store),
           heading('Signatures'),
           for (final a in mail.accounts)
             ListTile(
